@@ -428,16 +428,29 @@ button:disabled {
 	}
 
 	@media (max-width: 640px) {
+		.bingo-board-panel {
+			border-width: 1px;
+			border-radius: 0.75rem;
+			box-shadow: 3px 3px 0 color-mix(in oklab, CanvasText 88%, transparent);
+			padding: 0.65rem !important;
+		}
+
 		.bingo-grid {
 			align-items: stretch;
+			gap: 0.32rem;
 			grid-auto-rows: auto;
 		}
 
 		.bingo-cell {
 			aspect-ratio: auto;
-			min-height: 4.6rem;
+			min-height: 4.25rem;
 			height: 100%;
-			font-size: 0.82rem;
+			border-width: 1px;
+			border-radius: 0.58rem;
+			box-shadow: 2px 2px 0 currentColor;
+			padding: 0.28rem;
+			font-size: clamp(0.72rem, 3.35vw, 0.88rem) !important;
+			line-height: 1.08 !important;
 		}
 
 		.claim-bingo-grid .bingo-cell {

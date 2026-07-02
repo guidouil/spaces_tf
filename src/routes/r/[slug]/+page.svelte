@@ -77,7 +77,7 @@
 </svelte:head>
 
 <main class="screen-shell">
-	<section class="mx-auto flex min-h-svh w-full max-w-xl flex-col px-5 py-5">
+	<section class="mx-auto flex min-h-svh w-full max-w-xl flex-col px-2 py-3 sm:px-5 sm:py-5">
 		<header class="flex items-center justify-between gap-3 py-2">
 			<a href={resolve('/')} class="brand-lockup"
 				><span class="brand-mark">tf</span><span>Spaces.tf</span></a
@@ -203,7 +203,7 @@
 			</div>
 		{:else if snapshot.gameType === 'bingo'}
 			<div class="grid flex-1 content-center gap-5 py-5">
-				<section class="panel p-5">
+				<section class="panel bingo-board-panel p-5">
 					<div class="flex items-start justify-between gap-3">
 						<div>
 							<p class="kicker">{snapshot.room.title}</p>
