@@ -1,5 +1,6 @@
 import { fail, redirect, type Cookies } from '@sveltejs/kit';
 import * as m from '$lib/paraglide/messages';
+import { getLocale } from '$lib/paraglide/runtime';
 import {
 	addBingoTile,
 	answerQuestion,
@@ -19,6 +20,7 @@ import {
 	launchQuestion,
 	playerCookieName,
 	redealBingoCards,
+	regenerateBingoTiles,
 	requireHost,
 	resolveBingoClaim,
 	startBingoGame,
@@ -178,6 +180,10 @@ export const actions: Actions = {
 	redealBingoCards: async ({ params, url, cookies }) => {
 		await authorize(params.slug, url, cookies);
 		return redealBingoCards(params.slug);
+	},
+	regenerateBingoTiles: async ({ params, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		return regenerateBingoTiles(params.slug, getLocale());
 	},
 	resolveBingoClaim: async ({ params, request, url, cookies }) => {
 		await authorize(params.slug, url, cookies);

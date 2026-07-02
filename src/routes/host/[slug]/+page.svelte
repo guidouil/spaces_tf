@@ -480,10 +480,23 @@
 				</section>
 			{:else}
 				<section class="panel p-4">
-					<p class="kicker">{m.bingo_tile_bank()}</p>
-					<h2 class="text-2xl font-black">
-						{m.bingo_tile_count({ count: snapshot.bingoTiles.length })}
-					</h2>
+					<div class="flex items-start justify-between gap-3">
+						<div>
+							<p class="kicker">{m.bingo_tile_bank()}</p>
+							<h2 class="text-2xl font-black">
+								{m.bingo_tile_count({ count: snapshot.bingoTiles.length })}
+							</h2>
+						</div>
+						<form method="POST" action="?/regenerateBingoTiles" use:enhance>
+							<button
+								class="small-button"
+								type="submit"
+								disabled={snapshot.room.status !== 'waiting'}
+							>
+								{m.regenerate_bingo_tiles()}
+							</button>
+						</form>
+					</div>
 					<div class="mt-4 grid gap-2">
 						{#each snapshot.bingoTiles as tile (tile.id)}
 							<div class="question-card">

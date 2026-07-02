@@ -11,6 +11,7 @@ import {
 	type BingoCardCell
 } from '$lib/game/bingo';
 import * as m from '$lib/paraglide/messages';
+import { getRandomBingoTileTexts } from '$lib/server/bingo-takes';
 import { db } from '$lib/server/db';
 import {
 	answers,
@@ -191,7 +192,7 @@ export function normalizeGameType(value: FormDataEntryValue | string | null | un
 	return value === 'bingo' ? 'bingo' : 'quiz';
 }
 
-export async function createRoom(title: string, gameType: GameType = 'quiz') {
+export async function createRoom(title: string, gameType: GameType = 'quiz', locale = 'en') {
 	for (let attempt = 0; attempt < 5; attempt += 1) {
 		const slug = makeSlug();
 		const hostToken = randomToken();
@@ -205,7 +206,7 @@ export async function createRoom(title: string, gameType: GameType = 'quiz') {
 
 				if (gameType === 'bingo') {
 					await tx.insert(bingoTiles).values(
-						getDefaultBingoTileTexts().map((text) => ({
+						getRandomBingoTileTexts(locale).map((text) => ({
 							roomId: createdRoom.id,
 							text
 						}))
@@ -654,6 +655,36 @@ export async function redealBingoCards(slug: string) {
 	return { success: true };
 }
 
+export async function regenerateBingoTiles(slug: string, locale = 'en') {
+	const room = await getRoomBySlug(slug);
+	if (!room || normalizeGameType(room.gameType) !== 'bingo') {
+		return fail(404, { message: m.error_room_not_found() });
+	}
+
+	if (room.status !== 'waiting') {
+		return fail(409, { message: m.error_bingo_must_be_stopped() });
+	}
+
+	await db.transaction(async (tx) => {
+		await tx.delete(bingoClaims).where(eq(bingoClaims.roomId, room.id));
+		await tx.delete(bingoCards).where(eq(bingoCards.roomId, room.id));
+		await tx.delete(bingoTiles).where(eq(bingoTiles.roomId, room.id));
+		await tx.insert(bingoTiles).values(
+			getRandomBingoTileTexts(locale).map((text) => ({
+				roomId: room.id,
+				text
+			}))
+		);
+		await tx.update(players).set({ score: 0 }).where(eq(players.roomId, room.id));
+		await tx
+			.update(rooms)
+			.set({ activeQuestionId: null, updatedAt: new Date() })
+			.where(eq(rooms.id, room.id));
+	});
+
+	return { success: true };
+}
+
 export async function toggleBingoTile(slug: string, playerId: number | null, tileId: number) {
 	const room = await getRoomBySlug(slug);
 	if (!room) return fail(404, { message: m.error_room_not_found() });
@@ -757,7 +788,10 @@ export async function resolveBingoClaim(
 		if (decision === 'approved') {
 			await tx.update(players).set({ score: 0 }).where(eq(players.roomId, room.id));
 			await tx.update(players).set({ score: 1 }).where(eq(players.id, claim.playerId));
-			await tx.update(rooms).set({ status: 'live', updatedAt: new Date() }).where(eq(rooms.id, room.id));
+			await tx
+				.update(rooms)
+				.set({ status: 'live', updatedAt: new Date() })
+				.where(eq(rooms.id, room.id));
 		} else {
 			await tx.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, room.id));
 		}
@@ -1235,7 +1269,8 @@ async function getOrCreateBingoCard(
 	playerId: number,
 	roomTiles?: Array<typeof bingoTiles.$inferSelect>
 ): Promise<PublicBingoCard> {
-	const tiles = roomTiles ?? (await db.select().from(bingoTiles).where(eq(bingoTiles.roomId, roomId)));
+	const tiles =
+		roomTiles ?? (await db.select().from(bingoTiles).where(eq(bingoTiles.roomId, roomId)));
 	const existingCard = await getBingoCard(roomId, playerId);
 	if (tiles.length < BINGO_CARD_CELL_COUNT) {
 		throw new Error('Bingo room does not have enough tiles.');
@@ -1285,7 +1320,10 @@ async function reconcileBingoCard(
 	if (keptCells.length === BINGO_CARD_CELL_COUNT) {
 		return {
 			...card,
-			cells: keptCells.map((cell) => ({ ...cell, text: tileById.get(cell.tileId)?.text ?? cell.text }))
+			cells: keptCells.map((cell) => ({
+				...cell,
+				text: tileById.get(cell.tileId)?.text ?? cell.text
+			}))
 		};
 	}
 
@@ -1339,29 +1377,4 @@ function makeBingoReplacementCells(tiles: PublicBingoTile[], count: number): Bin
 
 function isSameBingoLine(left: number[], right: number[]) {
 	return [...left].sort((a, b) => a - b).join(',') === [...right].sort((a, b) => a - b).join(',');
-}
-
-function getDefaultBingoTileTexts() {
-	return [
-		m.bingo_default_tile_01(),
-		m.bingo_default_tile_02(),
-		m.bingo_default_tile_03(),
-		m.bingo_default_tile_04(),
-		m.bingo_default_tile_05(),
-		m.bingo_default_tile_06(),
-		m.bingo_default_tile_07(),
-		m.bingo_default_tile_08(),
-		m.bingo_default_tile_09(),
-		m.bingo_default_tile_10(),
-		m.bingo_default_tile_11(),
-		m.bingo_default_tile_12(),
-		m.bingo_default_tile_13(),
-		m.bingo_default_tile_14(),
-		m.bingo_default_tile_15(),
-		m.bingo_default_tile_16(),
-		m.bingo_default_tile_17(),
-		m.bingo_default_tile_18(),
-		m.bingo_default_tile_19(),
-		m.bingo_default_tile_20()
-	];
 }

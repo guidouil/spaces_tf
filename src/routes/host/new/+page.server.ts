@@ -1,4 +1,5 @@
 import { redirect, type Actions } from '@sveltejs/kit';
+import { getLocale } from '$lib/paraglide/runtime';
 import { cleanTitle, createRoom, hostCookieName, normalizeGameType } from '$lib/server/game';
 
 export const actions: Actions = {
@@ -6,7 +7,8 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const room = await createRoom(
 			cleanTitle(form.get('title')),
-			normalizeGameType(form.get('gameType'))
+			normalizeGameType(form.get('gameType')),
+			getLocale()
 		);
 
 		cookies.set(hostCookieName(room.slug), room.hostToken, {
