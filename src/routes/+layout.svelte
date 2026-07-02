@@ -13,7 +13,7 @@
 </script>
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
-<LanguageSwitch currentLocale={currentLocale} onLocaleChange={handleLocaleChange} />
+<LanguageSwitch {currentLocale} onLocaleChange={handleLocaleChange} />
 {#key currentLocale}
 	{@render children()}
 {/key}

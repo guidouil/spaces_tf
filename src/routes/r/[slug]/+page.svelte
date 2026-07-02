@@ -1,27 +1,44 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
+	import BuyMeACoffeeLink from '$lib/BuyMeACoffeeLink.svelte';
 	import * as m from '$lib/paraglide/messages';
-	import { onMount, untrack } from 'svelte';
 	import type { ActionData, PageData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData | null } = $props();
-	const initialSnapshot = untrack(() => data.snapshot!);
-	let snapshot = $state(initialSnapshot);
+	let eventSnapshot = $state<PageData['snapshot'] | null>(null);
+	const snapshot = $derived(eventSnapshot ?? data.snapshot!);
 	let connected = $state(false);
+	let source: EventSource | null = null;
+	const firstBingoLine = $derived(
+		snapshot?.gameType === 'bingo' ? (snapshot.bingoCompletedLines[0] ?? null) : null
+	);
+	const currentPlayerHasPendingBingo = $derived(
+		snapshot?.gameType === 'bingo' && snapshot.currentPlayer
+			? snapshot.pendingBingoClaims.some((claim) => claim.playerId === snapshot.currentPlayer?.id)
+			: false
+	);
 
-	onMount(() => {
-		if (!data.roomExists || !data.player) return;
+	$effect(() => {
+		const slug = data.snapshot?.room.slug;
+		if (!data.roomExists || !data.player || !slug || source) return;
 
-		const source = new EventSource(`/r/${snapshot.room.slug}/events`);
+		source = new EventSource(`/r/${slug}/events`);
 		source.addEventListener('open', () => (connected = true));
 		source.addEventListener('error', () => (connected = false));
 		source.addEventListener('snapshot', (event) => {
-			snapshot = JSON.parse((event as MessageEvent).data);
+			eventSnapshot = JSON.parse((event as MessageEvent).data);
 		});
 
-		return () => source.close();
+		return () => {
+			source?.close();
+			source = null;
+		};
 	});
+
+	function lineValue(line: number[]) {
+		return JSON.stringify(line);
+	}
 </script>
 
 <svelte:head>
@@ -35,7 +52,7 @@
 				><span class="brand-mark">tf</span><span>Spaces.tf</span></a
 			>
 			<span class:live-dot={connected} class="status-pill">
-				{connected ? 'live' : 'signal'}
+				{connected ? m.live_signal() : m.signal_status()}
 			</span>
 		</header>
 
@@ -52,9 +69,14 @@
 				<div class="panel w-full p-5">
 					<p class="kicker">{m.join_room()}</p>
 					<h1 class="mt-2 text-4xl font-black">{snapshot.room.title}</h1>
+					<p class="mt-2 text-sm font-bold text-zinc-600 dark:text-zinc-300">
+						{snapshot.room.gameType === 'bingo' ? m.game_type_bingo() : m.game_type_quiz()}
+					</p>
 					<form method="POST" action="?/join" use:enhance class="mt-6 grid gap-4">
 						<label class="grid gap-2">
-							<span class="text-sm font-black uppercase tracking-[0.16em]">{m.nickname_label()}</span>
+							<span class="text-sm font-black uppercase tracking-[0.16em]"
+								>{m.nickname_label()}</span
+							>
 							<input
 								class="field text-xl"
 								name="nickname"
@@ -72,7 +94,7 @@
 					</form>
 				</div>
 			</div>
-		{:else}
+		{:else if snapshot.gameType === 'quiz'}
 			<div class="grid flex-1 content-center gap-5 py-5">
 				<section class="panel p-5">
 					<div class="flex items-start justify-between gap-3">
@@ -148,8 +170,78 @@
 					</div>
 				</section>
 			</div>
+		{:else}
+			<div class="grid flex-1 content-center gap-5 py-5">
+				<section class="panel p-5">
+					<div class="flex items-start justify-between gap-3">
+						<div>
+							<p class="kicker">{snapshot.room.title}</p>
+							<h1 class="mt-2 text-3xl font-black">
+								{snapshot.room.status === 'finished' ? m.survivor_podium() : m.bingo_player_board()}
+							</h1>
+						</div>
+						<div class="score-badge">
+							<span>{snapshot.currentPlayer?.score ?? 0}</span>
+							<small>{m.points_short()}</small>
+						</div>
+					</div>
+
+					{#if snapshot.room.status === 'finished'}
+						<a
+							class="big-button mt-6 block text-center"
+							href={resolve('/r/[slug]/podium', { slug: snapshot.room.slug })}
+						>
+							{m.view_podium()}
+						</a>
+					{:else if snapshot.bingoCard}
+						<form method="POST" action="?/toggleBingoTile" use:enhance class="bingo-grid mt-6">
+							{#each snapshot.bingoCard.cells as cell (cell.tileId)}
+								<button
+									class="bingo-cell"
+									class:checked={cell.checked}
+									type="submit"
+									name="tileId"
+									value={cell.tileId}
+								>
+									{cell.text}
+								</button>
+							{/each}
+						</form>
+
+						{#if firstBingoLine}
+							<form method="POST" action="?/claimBingo" use:enhance class="mt-4">
+								<input type="hidden" name="line" value={lineValue(firstBingoLine)} />
+								<button
+									class="big-button w-full"
+									type="submit"
+									disabled={currentPlayerHasPendingBingo}
+								>
+									{currentPlayerHasPendingBingo ? m.bingo_claim_pending() : m.call_bingo()}
+								</button>
+							</form>
+						{:else if form?.message}
+							<p class="feedback">{form.message}</p>
+						{:else}
+							<p class="feedback">{m.bingo_keep_listening()}</p>
+						{/if}
+					{/if}
+				</section>
+
+				<section class="panel p-4">
+					<p class="kicker">{m.live_score()}</p>
+					<div class="mt-3 grid gap-2">
+						{#each snapshot.leaderboard as player, index (player.id)}
+							<div class="score-row" class:me={player.id === snapshot.currentPlayer?.id}>
+								<span>#{index + 1}</span>
+								<strong>{player.nickname}</strong>
+								<b>{player.score}</b>
+							</div>
+						{/each}
+					</div>
+				</section>
+			</div>
 		{/if}
 
-		<div class="safe-bottom muted-zone">{m.non_critical_low_zone()}</div>
+		<div class="safe-bottom muted-zone"><BuyMeACoffeeLink /></div>
 	</section>
 </main>

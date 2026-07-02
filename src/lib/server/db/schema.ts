@@ -13,6 +13,7 @@ export const rooms = pgTable('rooms', {
 	id: serial('id').primaryKey(),
 	slug: text('slug').notNull().unique(),
 	title: text('title').notNull(),
+	gameType: text('game_type').notNull().default('quiz'),
 	status: text('status').notNull().default('waiting'),
 	hostToken: text('host_token').notNull(),
 	activeQuestionId: integer('active_question_id'),
@@ -65,5 +66,47 @@ export const answers = pgTable(
 	},
 	(table) => [uniqueIndex('answers_question_player_idx').on(table.questionId, table.playerId)]
 );
+
+export const bingoTiles = pgTable('bingo_tiles', {
+	id: serial('id').primaryKey(),
+	roomId: integer('room_id')
+		.notNull()
+		.references(() => rooms.id, { onDelete: 'cascade' }),
+	text: text('text').notNull(),
+	createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+});
+
+export const bingoCards = pgTable(
+	'bingo_cards',
+	{
+		id: serial('id').primaryKey(),
+		roomId: integer('room_id')
+			.notNull()
+			.references(() => rooms.id, { onDelete: 'cascade' }),
+		playerId: integer('player_id')
+			.notNull()
+			.references(() => players.id, { onDelete: 'cascade' }),
+		cells: jsonb('cells')
+			.$type<Array<{ tileId: number; text: string; checked: boolean }>>()
+			.notNull(),
+		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+	},
+	(table) => [uniqueIndex('bingo_cards_player_idx').on(table.roomId, table.playerId)]
+);
+
+export const bingoClaims = pgTable('bingo_claims', {
+	id: serial('id').primaryKey(),
+	roomId: integer('room_id')
+		.notNull()
+		.references(() => rooms.id, { onDelete: 'cascade' }),
+	playerId: integer('player_id')
+		.notNull()
+		.references(() => players.id, { onDelete: 'cascade' }),
+	line: jsonb('line').$type<number[]>().notNull(),
+	status: text('status').notNull().default('pending'),
+	createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+	decidedAt: timestamp('decided_at', { withTimezone: true })
+});
 
 export * from './auth.schema';

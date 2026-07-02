@@ -353,6 +353,63 @@ button:disabled {
 		color: #111111;
 	}
 
+	.game-type-grid {
+		display: grid;
+		gap: 0.75rem;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.game-type-chip {
+		min-height: 3.5rem;
+		text-align: center;
+	}
+
+	.bingo-grid {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 0.55rem;
+	}
+
+	.bingo-cell {
+		aspect-ratio: 1;
+		width: 100%;
+		border: 2px solid currentColor;
+		border-radius: 0.85rem;
+		background: color-mix(in oklab, Canvas 82%, transparent);
+		color: inherit;
+		padding: 0.45rem;
+		font-size: clamp(0.68rem, 2.5vw, 0.92rem);
+		font-weight: 1000;
+		line-height: 1.05;
+		text-align: center;
+		box-shadow: 3px 3px 0 currentColor;
+		overflow-wrap: anywhere;
+		transition:
+			transform 140ms ease,
+			box-shadow 140ms ease,
+			background 140ms ease;
+	}
+
+	.bingo-cell:active {
+		transform: translate(2px, 2px);
+		box-shadow: 1px 1px 0 currentColor;
+	}
+
+	.bingo-cell.checked,
+	.claim-row.pending {
+		background: #18e0c2;
+		color: #111111;
+	}
+
+	.claim-row {
+		display: grid;
+		gap: 0.75rem;
+		border: 2px solid color-mix(in oklab, CanvasText 72%, transparent);
+		border-radius: 0.8rem;
+		background: color-mix(in oklab, Canvas 78%, transparent);
+		padding: 0.8rem;
+	}
+
 	.score-badge {
 		display: grid;
 		min-width: 4.2rem;

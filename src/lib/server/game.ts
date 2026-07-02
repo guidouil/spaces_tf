@@ -1,18 +1,38 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
+import {
+	BINGO_CARD_CELL_COUNT,
+	BINGO_SIZE,
+	generateBingoCard,
+	getCompletedBingoLines,
+	isValidBingoLine,
+	toggleBingoCell,
+	type BingoCardCell
+} from '$lib/game/bingo';
 import * as m from '$lib/paraglide/messages';
 import { db } from '$lib/server/db';
-import { answers, players, questions, rooms } from '$lib/server/db/schema';
+import {
+	answers,
+	bingoCards,
+	bingoClaims,
+	bingoTiles,
+	players,
+	questions,
+	rooms
+} from '$lib/server/db/schema';
 
 const SCORE_CORRECT = 100;
 const HOST_COOKIE_PREFIX = 'spaces_tf_host_';
 const PLAYER_COOKIE_PREFIX = 'spaces_tf_player_';
 
+export type GameType = 'quiz' | 'bingo';
+
 export type PublicRoom = {
 	id: number;
 	slug: string;
 	title: string;
+	gameType: GameType;
 	status: string;
 	activeQuestionId: number | null;
 };
@@ -45,16 +65,53 @@ export type PublicAnswer = {
 	answeredAt: string;
 };
 
-export type GameSnapshot = {
+export type PublicBingoTile = {
+	id: number;
+	text: string;
+};
+
+export type PublicBingoCard = {
+	id: number;
+	size: number;
+	cells: BingoCardCell[];
+};
+
+export type PublicBingoClaim = {
+	id: number;
+	playerId: number;
+	nickname: string;
+	line: number[];
+	status: string;
+	createdAt: string;
+	decidedAt: string | null;
+};
+
+type BaseGameSnapshot = {
 	room: PublicRoom;
 	players: PublicPlayer[];
 	leaderboard: PublicPlayer[];
-	activeQuestion: PublicQuestion | null;
 	currentPlayer: PublicPlayer | null;
-	currentPlayerAnswer: PublicAnswer | null;
 	podium: PublicPlayer[];
+};
+
+export type QuizGameSnapshot = BaseGameSnapshot & {
+	gameType: 'quiz';
+	activeQuestion: PublicQuestion | null;
+	currentPlayerAnswer: PublicAnswer | null;
 	questions: PublicQuestion[];
 };
+
+export type BingoGameSnapshot = BaseGameSnapshot & {
+	gameType: 'bingo';
+	bingoCard: PublicBingoCard | null;
+	bingoTiles: PublicBingoTile[];
+	bingoClaims: PublicBingoClaim[];
+	pendingBingoClaims: PublicBingoClaim[];
+	bingoCompletedLines: number[][];
+	bingoCanClaim: boolean;
+};
+
+export type GameSnapshot = QuizGameSnapshot | BingoGameSnapshot;
 
 export type QuizCategoryOption = {
 	id: string;
@@ -128,16 +185,33 @@ export function validateChoices(values: FormDataEntryValue[]) {
 	return { error: null, choices };
 }
 
-export async function createRoom(title: string) {
+export function normalizeGameType(value: FormDataEntryValue | string | null | undefined): GameType {
+	return value === 'bingo' ? 'bingo' : 'quiz';
+}
+
+export async function createRoom(title: string, gameType: GameType = 'quiz') {
 	for (let attempt = 0; attempt < 5; attempt += 1) {
 		const slug = makeSlug();
 		const hostToken = randomToken();
 
 		try {
-			const [room] = await db
-				.insert(rooms)
-				.values({ slug, title: title.slice(0, 80), hostToken })
-				.returning();
+			const room = await db.transaction(async (tx) => {
+				const [createdRoom] = await tx
+					.insert(rooms)
+					.values({ slug, title: title.slice(0, 80), hostToken, gameType })
+					.returning();
+
+				if (gameType === 'bingo') {
+					await tx.insert(bingoTiles).values(
+						getDefaultBingoTileTexts().map((text) => ({
+							roomId: createdRoom.id,
+							text
+						}))
+					);
+				}
+
+				return createdRoom;
+			});
 
 			return room;
 		} catch (error) {
@@ -169,6 +243,7 @@ export async function getHostedRooms(hostTokens: Map<string, string>): Promise<H
 			id: room.id,
 			slug: room.slug,
 			title: room.title,
+			gameType: normalizeGameType(room.gameType),
 			status: room.status,
 			activeQuestionId: room.activeQuestionId,
 			createdAt: room.createdAt.toISOString(),
@@ -452,6 +527,160 @@ export async function answerQuestion(slug: string, playerId: number | null, choi
 	return { success: true, isCorrect };
 }
 
+export async function addBingoTile(slug: string, value: FormDataEntryValue | null) {
+	const room = await getRoomBySlug(slug);
+	if (!room || normalizeGameType(room.gameType) !== 'bingo') {
+		return fail(404, { message: m.error_room_not_found() });
+	}
+
+	const text = cleanBingoTileText(value);
+	if (text.length < 3) return fail(400, { message: m.error_bingo_tile_short() });
+	if (text.length > 80) return fail(400, { message: m.error_bingo_tile_long() });
+
+	await db.transaction(async (tx) => {
+		await tx.insert(bingoTiles).values({ roomId: room.id, text });
+		await tx.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, room.id));
+	});
+
+	return { success: true };
+}
+
+export async function deleteBingoTile(slug: string, tileId: number) {
+	const room = await getRoomBySlug(slug);
+	if (!room || normalizeGameType(room.gameType) !== 'bingo') {
+		return fail(404, { message: m.error_room_not_found() });
+	}
+
+	const roomTiles = await db.select().from(bingoTiles).where(eq(bingoTiles.roomId, room.id));
+	if (roomTiles.length <= BINGO_CARD_CELL_COUNT) {
+		return fail(400, { message: m.error_bingo_min_tiles() });
+	}
+
+	const [deletedTile] = await db
+		.delete(bingoTiles)
+		.where(and(eq(bingoTiles.id, tileId), eq(bingoTiles.roomId, room.id)))
+		.returning({ id: bingoTiles.id });
+
+	if (!deletedTile) return fail(404, { message: m.error_bingo_tile_not_found() });
+
+	await db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, room.id));
+
+	return { success: true };
+}
+
+export async function toggleBingoTile(slug: string, playerId: number | null, tileId: number) {
+	const room = await getRoomBySlug(slug);
+	if (!room) return fail(404, { message: m.error_room_not_found() });
+	if (normalizeGameType(room.gameType) !== 'bingo') {
+		return fail(400, { message: m.error_bingo_action_invalid() });
+	}
+	if (room.status === 'finished') return fail(409, { message: m.error_game_finished() });
+	if (!playerId) return fail(401, { message: m.error_join_before_playing() });
+
+	const player = await getPlayerForRoom(slug, playerId);
+	if (!player) return fail(401, { message: m.error_join_before_playing() });
+
+	const card = await getOrCreateBingoCard(room.id, player.id);
+	if (!card.cells.some((cell) => cell.tileId === tileId)) {
+		return fail(400, { message: m.error_bingo_tile_not_found() });
+	}
+
+	await db.transaction(async (tx) => {
+		await tx
+			.update(bingoCards)
+			.set({ cells: toggleBingoCell(card.cells, tileId), updatedAt: new Date() })
+			.where(eq(bingoCards.id, card.id));
+		await tx.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, room.id));
+	});
+
+	return { success: true };
+}
+
+export async function claimBingo(slug: string, playerId: number | null, line: number[]) {
+	const room = await getRoomBySlug(slug);
+	if (!room) return fail(404, { message: m.error_room_not_found() });
+	if (normalizeGameType(room.gameType) !== 'bingo') {
+		return fail(400, { message: m.error_bingo_action_invalid() });
+	}
+	if (room.status === 'finished') return fail(409, { message: m.error_game_finished() });
+	if (!playerId) return fail(401, { message: m.error_join_before_playing() });
+
+	const player = await getPlayerForRoom(slug, playerId);
+	if (!player) return fail(401, { message: m.error_join_before_playing() });
+
+	const [pendingClaim] = await db
+		.select()
+		.from(bingoClaims)
+		.where(
+			and(
+				eq(bingoClaims.roomId, room.id),
+				eq(bingoClaims.playerId, player.id),
+				eq(bingoClaims.status, 'pending')
+			)
+		)
+		.limit(1);
+	if (pendingClaim) return fail(409, { message: m.error_bingo_claim_pending() });
+
+	const card = await getOrCreateBingoCard(room.id, player.id);
+	if (!isValidBingoLine(card.cells, line)) {
+		return fail(400, { message: m.error_bingo_line_invalid() });
+	}
+
+	await db.transaction(async (tx) => {
+		await tx.insert(bingoClaims).values({ roomId: room.id, playerId: player.id, line });
+		await tx
+			.update(rooms)
+			.set({ status: 'live', updatedAt: new Date() })
+			.where(eq(rooms.id, room.id));
+	});
+
+	return { success: true };
+}
+
+export async function resolveBingoClaim(
+	slug: string,
+	claimId: number,
+	decision: 'approved' | 'rejected'
+) {
+	const room = await getRoomBySlug(slug);
+	if (!room || normalizeGameType(room.gameType) !== 'bingo') {
+		return fail(404, { message: m.error_room_not_found() });
+	}
+
+	const [claim] = await db
+		.select()
+		.from(bingoClaims)
+		.where(
+			and(
+				eq(bingoClaims.id, claimId),
+				eq(bingoClaims.roomId, room.id),
+				eq(bingoClaims.status, 'pending')
+			)
+		)
+		.limit(1);
+	if (!claim) return fail(404, { message: m.error_bingo_claim_not_found() });
+
+	await db.transaction(async (tx) => {
+		await tx
+			.update(bingoClaims)
+			.set({ status: decision, decidedAt: new Date() })
+			.where(eq(bingoClaims.id, claim.id));
+
+		if (decision === 'approved') {
+			await tx.update(players).set({ score: 0 }).where(eq(players.roomId, room.id));
+			await tx.update(players).set({ score: 1 }).where(eq(players.id, claim.playerId));
+			await tx
+				.update(rooms)
+				.set({ status: 'finished', updatedAt: new Date() })
+				.where(eq(rooms.id, room.id));
+		} else {
+			await tx.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, room.id));
+		}
+	});
+
+	return { success: true };
+}
+
 export async function getSnapshot(
 	slug: string,
 	options: { playerId?: number | null; includeAnswers?: boolean } = {}
@@ -459,6 +688,17 @@ export async function getSnapshot(
 	const room = await getRoomBySlug(slug);
 	if (!room) return null;
 
+	if (normalizeGameType(room.gameType) === 'bingo') {
+		return getBingoSnapshot(room, options);
+	}
+
+	return getQuizSnapshot(room, options);
+}
+
+async function getQuizSnapshot(
+	room: typeof rooms.$inferSelect,
+	options: { playerId?: number | null; includeAnswers?: boolean } = {}
+) {
 	const [roomPlayers, roomQuestions] = await Promise.all([
 		db
 			.select()
@@ -498,13 +738,8 @@ export async function getSnapshot(
 	}
 
 	return {
-		room: {
-			id: room.id,
-			slug: room.slug,
-			title: room.title,
-			status: room.status,
-			activeQuestionId: room.activeQuestionId
-		},
+		gameType: 'quiz' as const,
+		room: toPublicRoom(room),
 		players: roomPlayers.map(toPublicPlayer),
 		leaderboard: roomPlayers.slice(0, 5).map(toPublicPlayer),
 		activeQuestion: activeQuestion
@@ -517,6 +752,50 @@ export async function getSnapshot(
 		currentPlayerAnswer,
 		podium: roomPlayers.slice(0, 3).map(toPublicPlayer),
 		questions: roomQuestions.map((question) => toPublicQuestion(question, true))
+	};
+}
+
+async function getBingoSnapshot(
+	room: typeof rooms.$inferSelect,
+	options: { playerId?: number | null } = {}
+): Promise<BingoGameSnapshot> {
+	const roomPlayers = await db
+		.select()
+		.from(players)
+		.where(eq(players.roomId, room.id))
+		.orderBy(desc(players.score), players.createdAt);
+	const currentPlayer = options.playerId
+		? (roomPlayers.find((player) => player.id === options.playerId) ?? null)
+		: null;
+	const [tiles, claims] = await Promise.all([
+		db.select().from(bingoTiles).where(eq(bingoTiles.roomId, room.id)),
+		db
+			.select()
+			.from(bingoClaims)
+			.where(eq(bingoClaims.roomId, room.id))
+			.orderBy(desc(bingoClaims.createdAt))
+	]);
+
+	const card = currentPlayer ? await getOrCreateBingoCard(room.id, currentPlayer.id) : null;
+	const completedLines = card ? getCompletedBingoLines(card.cells) : [];
+	const publicClaims = claims.map((claim) => {
+		const player = roomPlayers.find((roomPlayer) => roomPlayer.id === claim.playerId);
+		return toPublicBingoClaim(claim, player?.nickname ?? m.unknown_player());
+	});
+
+	return {
+		gameType: 'bingo',
+		room: toPublicRoom(room),
+		players: roomPlayers.map(toPublicPlayer),
+		leaderboard: roomPlayers.slice(0, 5).map(toPublicPlayer),
+		currentPlayer: currentPlayer ? toPublicPlayer(currentPlayer) : null,
+		podium: roomPlayers.slice(0, 3).map(toPublicPlayer),
+		bingoCard: card,
+		bingoTiles: tiles.map(toPublicBingoTile),
+		bingoClaims: publicClaims,
+		pendingBingoClaims: publicClaims.filter((claim) => claim.status === 'pending'),
+		bingoCompletedLines: completedLines,
+		bingoCanClaim: room.status !== 'finished' && completedLines.length > 0
 	};
 }
 
@@ -745,6 +1024,12 @@ function cleanImportedText(value: string) {
 	return value.trim().replace(/\s+/g, ' ');
 }
 
+function cleanBingoTileText(value: FormDataEntryValue | null) {
+	return String(value ?? '')
+		.trim()
+		.replace(/\s+/g, ' ');
+}
+
 function shuffleChoices(choices: string[]) {
 	const shuffled = [...choices];
 
@@ -758,6 +1043,17 @@ function shuffleChoices(choices: string[]) {
 
 function randomToken() {
 	return randomBytes(24).toString('base64url');
+}
+
+function toPublicRoom(room: typeof rooms.$inferSelect): PublicRoom {
+	return {
+		id: room.id,
+		slug: room.slug,
+		title: room.title,
+		gameType: normalizeGameType(room.gameType),
+		status: room.status,
+		activeQuestionId: room.activeQuestionId
+	};
 }
 
 function toPublicPlayer(player: typeof players.$inferSelect): PublicPlayer {
@@ -781,4 +1077,96 @@ function toPublicQuestion(
 		closedAt: question.closedAt?.toISOString() ?? null,
 		...(includeAnswer ? { correctChoiceIndex: question.correctChoiceIndex } : {})
 	};
+}
+
+function toPublicBingoTile(tile: typeof bingoTiles.$inferSelect): PublicBingoTile {
+	return {
+		id: tile.id,
+		text: tile.text
+	};
+}
+
+function toPublicBingoClaim(
+	claim: typeof bingoClaims.$inferSelect,
+	nickname: string
+): PublicBingoClaim {
+	return {
+		id: claim.id,
+		playerId: claim.playerId,
+		nickname,
+		line: claim.line,
+		status: claim.status,
+		createdAt: claim.createdAt.toISOString(),
+		decidedAt: claim.decidedAt?.toISOString() ?? null
+	};
+}
+
+async function getOrCreateBingoCard(roomId: number, playerId: number): Promise<PublicBingoCard> {
+	const existingCard = await getBingoCard(roomId, playerId);
+	if (existingCard) return existingCard;
+
+	const tiles = await db.select().from(bingoTiles).where(eq(bingoTiles.roomId, roomId));
+	if (tiles.length < BINGO_CARD_CELL_COUNT) {
+		throw new Error('Bingo room does not have enough tiles.');
+	}
+
+	try {
+		const [card] = await db
+			.insert(bingoCards)
+			.values({
+				roomId,
+				playerId,
+				cells: generateBingoCard(tiles.map(toPublicBingoTile))
+			})
+			.returning();
+
+		return toPublicBingoCard(card);
+	} catch {
+		const card = await getBingoCard(roomId, playerId);
+		if (card) return card;
+		throw new Error('Could not create bingo card.');
+	}
+}
+
+async function getBingoCard(roomId: number, playerId: number) {
+	const [card] = await db
+		.select()
+		.from(bingoCards)
+		.where(and(eq(bingoCards.roomId, roomId), eq(bingoCards.playerId, playerId)))
+		.limit(1);
+
+	return card ? toPublicBingoCard(card) : null;
+}
+
+function toPublicBingoCard(card: typeof bingoCards.$inferSelect): PublicBingoCard {
+	return {
+		id: card.id,
+		size: BINGO_SIZE,
+		cells: card.cells
+	};
+}
+
+function getDefaultBingoTileTexts() {
+	return [
+		m.bingo_default_tile_01(),
+		m.bingo_default_tile_02(),
+		m.bingo_default_tile_03(),
+		m.bingo_default_tile_04(),
+		m.bingo_default_tile_05(),
+		m.bingo_default_tile_06(),
+		m.bingo_default_tile_07(),
+		m.bingo_default_tile_08(),
+		m.bingo_default_tile_09(),
+		m.bingo_default_tile_10(),
+		m.bingo_default_tile_11(),
+		m.bingo_default_tile_12(),
+		m.bingo_default_tile_13(),
+		m.bingo_default_tile_14(),
+		m.bingo_default_tile_15(),
+		m.bingo_default_tile_16(),
+		m.bingo_default_tile_17(),
+		m.bingo_default_tile_18(),
+		m.bingo_default_tile_19(),
+		m.bingo_default_tile_20()
+	];
 }

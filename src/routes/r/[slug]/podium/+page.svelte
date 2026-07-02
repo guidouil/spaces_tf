@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import BuyMeACoffeeLink from '$lib/BuyMeACoffeeLink.svelte';
 	import * as m from '$lib/paraglide/messages';
 	import type { PageData } from './$types';
 
@@ -29,7 +30,7 @@
 					<div class="podium-row" class:first={index === 0}>
 						<span>#{index + 1}</span>
 						<strong>{player.nickname}</strong>
-					<b>{player.score} {m.points_short()}</b>
+						<b>{player.score} {m.points_short()}</b>
 					</div>
 				{:else}
 					<div class="panel p-5 text-center font-black">{m.no_survivors()}</div>
@@ -37,6 +38,6 @@
 			</section>
 		</div>
 
-		<div class="safe-bottom muted-zone">{m.podium_footer()}</div>
+		<div class="safe-bottom muted-zone"><BuyMeACoffeeLink /></div>
 	</section>
 </main>

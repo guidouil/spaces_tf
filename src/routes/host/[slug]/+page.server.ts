@@ -1,9 +1,12 @@
 import { fail, redirect, type Cookies } from '@sveltejs/kit';
 import * as m from '$lib/paraglide/messages';
 import {
+	addBingoTile,
 	answerQuestion,
+	claimBingo,
 	closeQuestion,
 	createQuestion,
+	deleteBingoTile,
 	deleteQuestion,
 	finishGame,
 	getAnswersForQuestions,
@@ -15,7 +18,9 @@ import {
 	joinOrCreatePlayer,
 	launchQuestion,
 	playerCookieName,
-	requireHost
+	requireHost,
+	resolveBingoClaim,
+	toggleBingoTile
 } from '$lib/server/game';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -39,7 +44,7 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 		playerId: hostPlayer?.id ?? null
 	});
 	const questionCounts = await getAnswersForQuestions(
-		(snapshot?.questions ?? []).map((question) => question.id)
+		snapshot?.gameType === 'quiz' ? snapshot.questions.map((question) => question.id) : []
 	);
 
 	return {
@@ -99,6 +104,28 @@ export const actions: Actions = {
 
 		return answerQuestion(params.slug, playerId, choiceIndex);
 	},
+	toggleBingoTileAsPlayer: async ({ params, request, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		const form = await request.formData();
+		const playerId = Number(cookies.get(playerCookieName(params.slug)));
+		const tileId = Number(form.get('tileId'));
+
+		if (!Number.isInteger(playerId)) return fail(401, { message: m.error_join_before_playing() });
+		if (!Number.isInteger(tileId)) return fail(400, { message: m.error_bingo_tile_not_found() });
+
+		return toggleBingoTile(params.slug, playerId, tileId);
+	},
+	claimBingoAsPlayer: async ({ params, request, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		const form = await request.formData();
+		const playerId = Number(cookies.get(playerCookieName(params.slug)));
+		const line = parseBingoLine(form.get('line'));
+
+		if (!Number.isInteger(playerId)) return fail(401, { message: m.error_join_before_playing() });
+		if (!line) return fail(400, { message: m.error_bingo_line_invalid() });
+
+		return claimBingo(params.slug, playerId, line);
+	},
 	launchQuestion: async ({ params, request, url, cookies }) => {
 		await authorize(params.slug, url, cookies);
 		const form = await request.formData();
@@ -117,6 +144,31 @@ export const actions: Actions = {
 		await authorize(params.slug, url, cookies);
 		return closeQuestion(params.slug);
 	},
+	addBingoTile: async ({ params, request, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		const form = await request.formData();
+		return addBingoTile(params.slug, form.get('text'));
+	},
+	deleteBingoTile: async ({ params, request, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		const form = await request.formData();
+		const tileId = Number(form.get('tileId'));
+		if (!Number.isInteger(tileId)) return fail(400, { message: m.error_bingo_tile_not_found() });
+		return deleteBingoTile(params.slug, tileId);
+	},
+	resolveBingoClaim: async ({ params, request, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		const form = await request.formData();
+		const claimId = Number(form.get('claimId'));
+		const decision = String(form.get('decision'));
+
+		if (!Number.isInteger(claimId)) return fail(400, { message: m.error_bingo_claim_not_found() });
+		if (decision !== 'approved' && decision !== 'rejected') {
+			return fail(400, { message: m.error_bingo_claim_not_found() });
+		}
+
+		return resolveBingoClaim(params.slug, claimId, decision);
+	},
 	finishGame: async ({ params, url, cookies }) => {
 		await authorize(params.slug, url, cookies);
 		const result = await finishGame(params.slug);
@@ -128,4 +180,23 @@ export const actions: Actions = {
 async function authorize(slug: string, url: URL, cookies: Cookies) {
 	const token = url.searchParams.get('token') ?? cookies.get(hostCookieName(slug));
 	await requireHost(slug, token);
+}
+
+function parseBingoLine(value: FormDataEntryValue | null) {
+	if (typeof value !== 'string') return null;
+
+	try {
+		const line = JSON.parse(value) as unknown;
+		if (
+			Array.isArray(line) &&
+			line.length === 4 &&
+			line.every((index) => Number.isInteger(index) && index >= 0 && index < 16)
+		) {
+			return line;
+		}
+	} catch {
+		return null;
+	}
+
+	return null;
 }

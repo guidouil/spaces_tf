@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
+	import BuyMeACoffeeLink from '$lib/BuyMeACoffeeLink.svelte';
 	import * as m from '$lib/paraglide/messages';
 
 	let { form }: { form: { message?: string } | null } = $props();
@@ -58,6 +59,16 @@
 							autocomplete="off"
 						/>
 					</label>
+					<div class="game-type-grid">
+						<label class="radio-chip game-type-chip">
+							<input type="radio" name="gameType" value="quiz" checked />
+							<span>{m.game_type_quiz()}</span>
+						</label>
+						<label class="radio-chip game-type-chip">
+							<input type="radio" name="gameType" value="bingo" />
+							<span>{m.game_type_bingo()}</span>
+						</label>
+					</div>
 					{#if form?.message}
 						<p class="text-sm font-bold text-red-600 dark:text-red-300">{form.message}</p>
 					{/if}
@@ -85,7 +96,7 @@
 		</div>
 
 		<footer class="safe-bottom muted-zone">
-			<span>{m.home_footer()}</span>
+			<BuyMeACoffeeLink />
 		</footer>
 	</section>
 </main>

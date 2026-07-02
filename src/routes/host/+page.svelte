@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
+	import BuyMeACoffeeLink from '$lib/BuyMeACoffeeLink.svelte';
 	import * as m from '$lib/paraglide/messages';
 	import type { ActionData, PageData } from './$types';
 
@@ -41,7 +42,8 @@
 								<p
 									class="text-xs font-black uppercase tracking-[0.16em] text-zinc-600 dark:text-zinc-300"
 								>
-									{room.status} · {m.room()}
+									{room.gameType === 'bingo' ? m.game_type_bingo() : m.game_type_quiz()} · {room.status}
+									· {m.room()}
 									{room.slug}
 								</p>
 								<h2 class="mt-1 truncate text-2xl font-black">{room.title}</h2>
@@ -78,7 +80,7 @@
 			</div>
 		</section>
 
-		<div class="safe-bottom muted-zone">{m.twitter_safe_zone()}</div>
+		<div class="safe-bottom muted-zone"><BuyMeACoffeeLink /></div>
 	</section>
 
 	{#if roomToDelete}
