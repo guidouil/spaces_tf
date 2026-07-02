@@ -86,6 +86,10 @@
 							<input type="radio" name="gameType" value="bingo" />
 							<span>{m.game_type_bingo()}</span>
 						</label>
+						<label class="radio-chip game-type-chip">
+							<input type="radio" name="gameType" value="consensus" />
+							<span>{m.game_type_consensus()}</span>
+						</label>
 					</div>
 					{#if form?.message}
 						<p class="text-sm font-bold text-red-600 dark:text-red-300">{form.message}</p>

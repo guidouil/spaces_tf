@@ -3,8 +3,10 @@
 	import { resolve } from '$app/paths';
 	import BuyMeACoffeeLink from '$lib/BuyMeACoffeeLink.svelte';
 	import * as m from '$lib/paraglide/messages';
+	import type { PageData } from './$types';
 
-	let { form }: { form: { message?: string } | null } = $props();
+	let { data, form }: { data: PageData; form: { message?: string } | null } = $props();
+	let selectedGameType = $state('quiz');
 </script>
 
 <svelte:head><title>{m.create_room_title()}</title></svelte:head>
@@ -30,14 +32,30 @@
 				</label>
 				<div class="game-type-grid">
 					<label class="radio-chip game-type-chip">
-						<input type="radio" name="gameType" value="quiz" checked />
+						<input type="radio" name="gameType" value="quiz" bind:group={selectedGameType} />
 						<span>{m.game_type_quiz()}</span>
 					</label>
 					<label class="radio-chip game-type-chip">
-						<input type="radio" name="gameType" value="bingo" />
+						<input type="radio" name="gameType" value="bingo" bind:group={selectedGameType} />
 						<span>{m.game_type_bingo()}</span>
 					</label>
+					<label class="radio-chip game-type-chip">
+						<input type="radio" name="gameType" value="consensus" bind:group={selectedGameType} />
+						<span>{m.game_type_consensus()}</span>
+					</label>
 				</div>
+				{#if selectedGameType === 'consensus'}
+					<label class="grid gap-2">
+						<span class="field-label">{m.consensus_pack()}</span>
+						<select class="field" name="consensusPackId">
+							{#each data.consensusPacks as pack (pack.id)}
+								<option value={pack.id}>
+									{pack.name} · {m.question_count({ count: pack.questionCount })}
+								</option>
+							{/each}
+						</select>
+					</label>
+				{/if}
 				{#if form?.message}
 					<p class="text-sm font-bold text-red-600 dark:text-red-300">{form.message}</p>
 				{/if}

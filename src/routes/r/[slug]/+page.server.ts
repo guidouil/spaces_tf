@@ -9,7 +9,8 @@ import {
 	getRoomBySlug,
 	joinRoom,
 	playerCookieName,
-	toggleBingoTile
+	toggleBingoTile,
+	voteConsensus
 } from '$lib/server/game';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -29,7 +30,9 @@ export const load: PageServerLoad = async ({ params, cookies, url }) => {
 			description: room
 				? room.gameType === 'bingo'
 					? `Join "${room.title}" on Spaces.tf: a live Spaces Bingo room for this Space.`
-					: `Join "${room.title}" on Spaces.tf: a live quiz room for this Space.`
+					: room.gameType === 'consensus'
+						? `Join "${room.title}" on Spaces.tf: a live Consensus room for this Space.`
+						: `Join "${room.title}" on Spaces.tf: a live quiz room for this Space.`
 				: 'This Spaces.tf room could not be found.',
 			url: pageUrl,
 			image: `${pageUrl}/og.png`
@@ -63,6 +66,16 @@ export const actions: Actions = {
 		if (!Number.isInteger(choiceIndex)) return fail(400, { message: m.error_invalid_answer() });
 
 		return answerQuestion(params.slug, playerId, choiceIndex);
+	},
+	voteConsensus: async ({ params, request, cookies }) => {
+		const form = await request.formData();
+		const playerId = Number(cookies.get(playerCookieName(params.slug)));
+		const choiceIndex = Number(form.get('choiceIndex'));
+
+		if (!Number.isInteger(playerId)) return fail(401, { message: m.error_join_before_playing() });
+		if (!Number.isInteger(choiceIndex)) return fail(400, { message: m.error_invalid_answer() });
+
+		return voteConsensus(params.slug, playerId, choiceIndex);
 	},
 	toggleBingoTile: async ({ params, request, cookies }) => {
 		const form = await request.formData();

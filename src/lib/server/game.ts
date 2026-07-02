@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import {
 	BINGO_CARD_CELL_COUNT,
@@ -10,8 +10,21 @@ import {
 	toggleBingoCell,
 	type BingoCardCell
 } from '$lib/game/bingo';
+import {
+	CONSENSUS_CHOICE_COUNT,
+	CONSENSUS_ROUND_SECONDS,
+	isConsensusRoundExpired,
+	isValidConsensusChoiceIndex,
+	resolveConsensusResult,
+	type ConsensusResult
+} from '$lib/game/consensus';
 import * as m from '$lib/paraglide/messages';
 import { getRandomBingoTileTexts } from '$lib/server/bingo-takes';
+import {
+	DEFAULT_CONSENSUS_PACK_ID,
+	getConsensusPackOptions,
+	getConsensusQuestionSeeds
+} from '$lib/server/consensus-packs';
 import { db } from '$lib/server/db';
 import {
 	answers,
@@ -27,7 +40,7 @@ const SCORE_CORRECT = 100;
 const HOST_COOKIE_PREFIX = 'spaces_tf_host_';
 const PLAYER_COOKIE_PREFIX = 'spaces_tf_player_';
 
-export type GameType = 'quiz' | 'bingo';
+export type GameType = 'quiz' | 'bingo' | 'consensus';
 
 export type PublicRoom = {
 	id: number;
@@ -64,6 +77,11 @@ export type PublicAnswer = {
 	isCorrect: boolean;
 	scoreDelta: number;
 	answeredAt: string;
+};
+
+export type PublicConsensusRoundResult = ConsensusResult & {
+	playerScored: boolean | null;
+	playerScoreDelta: number | null;
 };
 
 export type PublicBingoTile = {
@@ -114,7 +132,17 @@ export type BingoGameSnapshot = BaseGameSnapshot & {
 	bingoCanClaim: boolean;
 };
 
-export type GameSnapshot = QuizGameSnapshot | BingoGameSnapshot;
+export type ConsensusGameSnapshot = BaseGameSnapshot & {
+	gameType: 'consensus';
+	currentRound: PublicQuestion | null;
+	currentPlayerVote: PublicAnswer | null;
+	rounds: PublicQuestion[];
+	roundVoteCounts: Record<number, number>;
+	roundResult: PublicConsensusRoundResult | null;
+	roundSeconds: number;
+};
+
+export type GameSnapshot = QuizGameSnapshot | BingoGameSnapshot | ConsensusGameSnapshot;
 
 export type QuizCategoryOption = {
 	id: string;
@@ -125,6 +153,10 @@ export type QuizImportOptions = {
 	source: 'opentdb' | 'quizzapi';
 	category?: string;
 	difficulty?: string;
+};
+
+export type CreateRoomOptions = {
+	consensusPackId?: string;
 };
 
 const OPEN_TDB_DIFFICULTIES = new Set(['easy', 'medium', 'hard']);
@@ -189,10 +221,16 @@ export function validateChoices(values: FormDataEntryValue[]) {
 }
 
 export function normalizeGameType(value: FormDataEntryValue | string | null | undefined): GameType {
-	return value === 'bingo' ? 'bingo' : 'quiz';
+	if (value === 'bingo' || value === 'consensus') return value;
+	return 'quiz';
 }
 
-export async function createRoom(title: string, gameType: GameType = 'quiz', locale = 'en') {
+export async function createRoom(
+	title: string,
+	gameType: GameType = 'quiz',
+	locale = 'en',
+	options: CreateRoomOptions = {}
+) {
 	for (let attempt = 0; attempt < 5; attempt += 1) {
 		const slug = makeSlug();
 		const hostToken = randomToken();
@@ -209,6 +247,20 @@ export async function createRoom(title: string, gameType: GameType = 'quiz', loc
 						getRandomBingoTileTexts(locale).map((text) => ({
 							roomId: createdRoom.id,
 							text
+						}))
+					);
+				}
+
+				if (gameType === 'consensus') {
+					await tx.insert(questions).values(
+						getConsensusQuestionSeeds(
+							locale,
+							options.consensusPackId ?? DEFAULT_CONSENSUS_PACK_ID
+						).map((question) => ({
+							roomId: createdRoom.id,
+							text: question.text,
+							choices: question.choices,
+							correctChoiceIndex: -1
 						}))
 					);
 				}
@@ -466,6 +518,15 @@ export async function finishGame(slug: string) {
 	const room = await getRoomBySlug(slug);
 	if (!room) return fail(404, { message: m.error_room_not_found() });
 
+	if (
+		normalizeGameType(room.gameType) === 'consensus' &&
+		room.activeQuestionId &&
+		room.status === 'live'
+	) {
+		const closeResult = await closeConsensusRound(slug);
+		if (!('success' in closeResult)) return closeResult;
+	}
+
 	await db.transaction(async (tx) => {
 		await tx
 			.update(questions)
@@ -528,6 +589,161 @@ export async function answerQuestion(slug: string, playerId: number | null, choi
 	}
 
 	return { success: true, isCorrect };
+}
+
+export async function launchConsensusRound(slug: string, questionId: number) {
+	const room = await getRoomBySlug(slug);
+	if (!room || normalizeGameType(room.gameType) !== 'consensus') {
+		return fail(404, { message: m.error_room_not_found() });
+	}
+	if (room.status === 'finished') return fail(409, { message: m.error_game_finished() });
+
+	const [question] = await db
+		.select()
+		.from(questions)
+		.where(and(eq(questions.id, questionId), eq(questions.roomId, room.id)))
+		.limit(1);
+	if (!question) return fail(404, { message: m.error_question_not_found() });
+	if (question.choices.length !== CONSENSUS_CHOICE_COUNT) {
+		return fail(400, { message: m.error_consensus_round_invalid() });
+	}
+
+	await db.transaction(async (tx) => {
+		await tx
+			.update(questions)
+			.set({ status: 'closed', closedAt: new Date() })
+			.where(and(eq(questions.roomId, room.id), eq(questions.status, 'active')));
+		await tx
+			.update(questions)
+			.set({ status: 'active', startedAt: new Date(), closedAt: null, correctChoiceIndex: -1 })
+			.where(eq(questions.id, question.id));
+		await tx
+			.update(rooms)
+			.set({ status: 'live', activeQuestionId: question.id, updatedAt: new Date() })
+			.where(eq(rooms.id, room.id));
+	});
+
+	return { success: true };
+}
+
+export async function launchNextConsensusRound(slug: string) {
+	const room = await getRoomBySlug(slug);
+	if (!room || normalizeGameType(room.gameType) !== 'consensus') {
+		return fail(404, { message: m.error_room_not_found() });
+	}
+	if (room.status === 'finished') return fail(409, { message: m.error_game_finished() });
+
+	const [nextQuestion] = await db
+		.select()
+		.from(questions)
+		.where(and(eq(questions.roomId, room.id), eq(questions.status, 'draft')))
+		.orderBy(asc(questions.id))
+		.limit(1);
+
+	if (!nextQuestion) return fail(404, { message: m.error_question_not_found() });
+
+	return launchConsensusRound(slug, nextQuestion.id);
+}
+
+export async function voteConsensus(slug: string, playerId: number | null, choiceIndex: number) {
+	const room = await getRoomBySlug(slug);
+	if (!room) return fail(404, { message: m.error_room_not_found() });
+	if (normalizeGameType(room.gameType) !== 'consensus') {
+		return fail(400, { message: m.error_consensus_action_invalid() });
+	}
+	if (room.status === 'finished') return fail(409, { message: m.error_game_finished() });
+	if (!playerId) return fail(401, { message: m.error_join_before_playing() });
+	if (!room.activeQuestionId) return fail(409, { message: m.error_too_late() });
+	if (!isValidConsensusChoiceIndex(choiceIndex)) {
+		return fail(400, { message: m.error_invalid_answer() });
+	}
+
+	const [player, question] = await Promise.all([
+		getPlayerForRoom(slug, playerId),
+		db
+			.select()
+			.from(questions)
+			.where(and(eq(questions.id, room.activeQuestionId), eq(questions.status, 'active')))
+			.limit(1)
+			.then(([value]) => value ?? null)
+	]);
+	if (!player) return fail(401, { message: m.error_join_before_playing() });
+	if (!question || isConsensusRoundExpired(question.startedAt)) {
+		return fail(409, { message: m.error_too_late() });
+	}
+
+	try {
+		await db.transaction(async (tx) => {
+			await tx.insert(answers).values({
+				questionId: question.id,
+				playerId: player.id,
+				choiceIndex,
+				isCorrect: false,
+				scoreDelta: 0
+			});
+			await tx.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, room.id));
+		});
+	} catch {
+		return fail(409, { message: m.error_already_answered() });
+	}
+
+	return { success: true };
+}
+
+export async function closeConsensusRound(slug: string) {
+	const room = await getRoomBySlug(slug);
+	if (!room || normalizeGameType(room.gameType) !== 'consensus') {
+		return fail(404, { message: m.error_room_not_found() });
+	}
+	if (!room.activeQuestionId) return { success: true };
+
+	const [question] = await db
+		.select()
+		.from(questions)
+		.where(and(eq(questions.id, room.activeQuestionId), eq(questions.roomId, room.id)))
+		.limit(1);
+	if (!question) return fail(404, { message: m.error_question_not_found() });
+	if (question.status === 'closed') return { success: true };
+
+	const roundAnswers = await db.select().from(answers).where(eq(answers.questionId, question.id));
+	const result = resolveConsensusResult(roundAnswers.map((answer) => answer.choiceIndex));
+
+	await db.transaction(async (tx) => {
+		for (const answer of roundAnswers) {
+			const scoreDelta = isValidConsensusChoiceIndex(answer.choiceIndex)
+				? result.scoreForChoice[answer.choiceIndex]
+				: 0;
+			await tx
+				.update(answers)
+				.set({
+					isCorrect: scoreDelta > 0,
+					scoreDelta
+				})
+				.where(eq(answers.id, answer.id));
+
+			if (scoreDelta > 0) {
+				await tx
+					.update(players)
+					.set({ score: sql`${players.score} + ${scoreDelta}` })
+					.where(eq(players.id, answer.playerId));
+			}
+		}
+
+		await tx
+			.update(questions)
+			.set({
+				status: 'closed',
+				closedAt: new Date(),
+				correctChoiceIndex: result.majorityChoiceIndex ?? -1
+			})
+			.where(eq(questions.id, question.id));
+		await tx
+			.update(rooms)
+			.set({ status: 'waiting', activeQuestionId: question.id, updatedAt: new Date() })
+			.where(eq(rooms.id, room.id));
+	});
+
+	return { success: true };
 }
 
 export async function addBingoTile(slug: string, value: FormDataEntryValue | null) {
@@ -811,6 +1027,10 @@ export async function getSnapshot(
 		return getBingoSnapshot(room, options);
 	}
 
+	if (normalizeGameType(room.gameType) === 'consensus') {
+		return getConsensusSnapshot(room, options);
+	}
+
 	return getQuizSnapshot(room, options);
 }
 
@@ -937,6 +1157,81 @@ async function getBingoSnapshot(
 		bingoClaimableLines: claimableLines,
 		bingoCanClaim: room.status === 'live' && claimableLines.length > 0
 	};
+}
+
+async function getConsensusSnapshot(
+	room: typeof rooms.$inferSelect,
+	options: { playerId?: number | null; includeAnswers?: boolean } = {}
+): Promise<ConsensusGameSnapshot> {
+	const [roomPlayers, roomQuestions] = await Promise.all([
+		db
+			.select()
+			.from(players)
+			.where(eq(players.roomId, room.id))
+			.orderBy(desc(players.score), players.createdAt),
+		db
+			.select()
+			.from(questions)
+			.where(eq(questions.roomId, room.id))
+			.orderBy(desc(questions.createdAt))
+	]);
+
+	const currentRound = room.activeQuestionId
+		? (roomQuestions.find((question) => question.id === room.activeQuestionId) ?? null)
+		: (roomQuestions.find((question) => question.status === 'active') ?? null);
+	const currentPlayer = options.playerId
+		? (roomPlayers.find((player) => player.id === options.playerId) ?? null)
+		: null;
+	const questionIds = roomQuestions.map((question) => question.id);
+	const allAnswers =
+		questionIds.length > 0
+			? await db.select().from(answers).where(inArray(answers.questionId, questionIds))
+			: [];
+	const roundVoteCounts = new Map<number, number>();
+	for (const answer of allAnswers) {
+		roundVoteCounts.set(answer.questionId, (roundVoteCounts.get(answer.questionId) ?? 0) + 1);
+	}
+
+	const currentRoundAnswers = currentRound
+		? allAnswers.filter((answer) => answer.questionId === currentRound.id)
+		: [];
+	const currentPlayerVote =
+		currentPlayer && currentRound
+			? (currentRoundAnswers.find((answer) => answer.playerId === currentPlayer.id) ?? null)
+			: null;
+	const result =
+		currentRound && currentRound.status === 'closed'
+			? resolveConsensusResult(currentRoundAnswers.map((answer) => answer.choiceIndex))
+			: null;
+
+	return {
+		gameType: 'consensus',
+		room: toPublicRoom(room),
+		players: roomPlayers.map(toPublicPlayer),
+		leaderboard: roomPlayers.slice(0, 5).map(toPublicPlayer),
+		currentPlayer: currentPlayer ? toPublicPlayer(currentPlayer) : null,
+		podium: roomPlayers.slice(0, 3).map(toPublicPlayer),
+		currentRound: currentRound
+			? toPublicQuestion(currentRound, options.includeAnswers || currentRound.status !== 'active')
+			: null,
+		currentPlayerVote: currentPlayerVote ? toPublicAnswer(currentPlayerVote) : null,
+		rounds: roomQuestions.map((question) =>
+			toPublicQuestion(question, options.includeAnswers || question.status !== 'active')
+		),
+		roundVoteCounts: Object.fromEntries(roundVoteCounts),
+		roundResult: result
+			? {
+					...result,
+					playerScored: currentPlayerVote ? currentPlayerVote.scoreDelta > 0 : null,
+					playerScoreDelta: currentPlayerVote ? currentPlayerVote.scoreDelta : null
+				}
+			: null,
+		roundSeconds: CONSENSUS_ROUND_SECONDS
+	};
+}
+
+export function getConsensusPacks(locale: string) {
+	return getConsensusPackOptions(locale);
 }
 
 export async function getPodium(slug: string) {
@@ -1201,6 +1496,15 @@ function toPublicPlayer(player: typeof players.$inferSelect): PublicPlayer {
 		id: player.id,
 		nickname: player.nickname,
 		score: player.score
+	};
+}
+
+function toPublicAnswer(answer: typeof answers.$inferSelect): PublicAnswer {
+	return {
+		choiceIndex: answer.choiceIndex,
+		isCorrect: answer.isCorrect,
+		scoreDelta: answer.scoreDelta,
+		answeredAt: answer.answeredAt.toISOString()
 	};
 }
 

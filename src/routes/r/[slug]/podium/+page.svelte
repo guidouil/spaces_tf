@@ -5,6 +5,10 @@
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	const podiumTitle = $derived(
+		data.room.gameType === 'consensus' ? m.consensus_social_flair_podium() : m.survivor_podium()
+	);
 </script>
 
 <svelte:head>
@@ -37,7 +41,7 @@
 		<div class="grid flex-1 content-center gap-5 py-8">
 			<section class="panel p-5 text-center">
 				<p class="kicker">{m.end_signal()}</p>
-				<h1 class="mt-2 text-5xl font-black">{m.survivor_podium()}</h1>
+				<h1 class="mt-2 text-5xl font-black">{podiumTitle}</h1>
 				<p class="mt-3 font-bold text-zinc-600 dark:text-zinc-300">{data.room.title}</p>
 			</section>
 

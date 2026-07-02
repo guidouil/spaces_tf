@@ -7,6 +7,12 @@
 
 	let { data, form }: { data: PageData; form: ActionData | null } = $props();
 	let roomToDelete = $state<PageData['rooms'][number] | null>(null);
+
+	function gameTypeLabel(gameType: string) {
+		if (gameType === 'bingo') return m.game_type_bingo();
+		if (gameType === 'consensus') return m.game_type_consensus();
+		return m.game_type_quiz();
+	}
 </script>
 
 <svelte:head><title>{m.my_games_page_title()}</title></svelte:head>
@@ -42,8 +48,7 @@
 								<p
 									class="text-xs font-black uppercase tracking-[0.16em] text-zinc-600 dark:text-zinc-300"
 								>
-									{room.gameType === 'bingo' ? m.game_type_bingo() : m.game_type_quiz()} · {room.status}
-									· {m.room()}
+									{gameTypeLabel(room.gameType)} · {room.status} · {m.room()}
 									{room.slug}
 								</p>
 								<h2 class="mt-1 truncate text-2xl font-black">{room.title}</h2>

@@ -5,6 +5,7 @@ import {
 	addBingoTile,
 	answerQuestion,
 	claimBingo,
+	closeConsensusRound,
 	closeQuestion,
 	createQuestion,
 	deleteBingoTile,
@@ -17,6 +18,8 @@ import {
 	hostCookieName,
 	importQuestionsFromApi,
 	joinOrCreatePlayer,
+	launchConsensusRound,
+	launchNextConsensusRound,
 	launchQuestion,
 	playerCookieName,
 	redealBingoCards,
@@ -26,7 +29,8 @@ import {
 	startBingoGame,
 	stopBingoGame,
 	updateBingoTile,
-	toggleBingoTile
+	toggleBingoTile,
+	voteConsensus
 } from '$lib/server/game';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -49,9 +53,13 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 		includeAnswers: true,
 		playerId: hostPlayer?.id ?? null
 	});
-	const questionCounts = await getAnswersForQuestions(
-		snapshot?.gameType === 'quiz' ? snapshot.questions.map((question) => question.id) : []
-	);
+	const countableQuestionIds =
+		snapshot?.gameType === 'quiz'
+			? snapshot.questions.map((question) => question.id)
+			: snapshot?.gameType === 'consensus'
+				? snapshot.rounds.map((question) => question.id)
+				: [];
+	const questionCounts = await getAnswersForQuestions(countableQuestionIds);
 
 	return {
 		token: room.hostToken,
@@ -110,6 +118,17 @@ export const actions: Actions = {
 
 		return answerQuestion(params.slug, playerId, choiceIndex);
 	},
+	voteConsensusAsPlayer: async ({ params, request, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		const form = await request.formData();
+		const playerId = Number(cookies.get(playerCookieName(params.slug)));
+		const choiceIndex = Number(form.get('choiceIndex'));
+
+		if (!Number.isInteger(playerId)) return fail(401, { message: m.error_join_before_playing() });
+		if (!Number.isInteger(choiceIndex)) return fail(400, { message: m.error_invalid_answer() });
+
+		return voteConsensus(params.slug, playerId, choiceIndex);
+	},
 	toggleBingoTileAsPlayer: async ({ params, request, url, cookies }) => {
 		await authorize(params.slug, url, cookies);
 		const form = await request.formData();
@@ -139,6 +158,17 @@ export const actions: Actions = {
 		if (!Number.isInteger(questionId)) return fail(400, { message: m.error_question_invalid() });
 		return launchQuestion(params.slug, questionId);
 	},
+	launchConsensusRound: async ({ params, request, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		const form = await request.formData();
+		const questionId = Number(form.get('questionId'));
+		if (!Number.isInteger(questionId)) return fail(400, { message: m.error_question_invalid() });
+		return launchConsensusRound(params.slug, questionId);
+	},
+	launchNextConsensusRound: async ({ params, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		return launchNextConsensusRound(params.slug);
+	},
 	deleteQuestion: async ({ params, request, url, cookies }) => {
 		await authorize(params.slug, url, cookies);
 		const form = await request.formData();
@@ -149,6 +179,10 @@ export const actions: Actions = {
 	closeQuestion: async ({ params, url, cookies }) => {
 		await authorize(params.slug, url, cookies);
 		return closeQuestion(params.slug);
+	},
+	closeConsensusRound: async ({ params, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		return closeConsensusRound(params.slug);
 	},
 	addBingoTile: async ({ params, request, url, cookies }) => {
 		await authorize(params.slug, url, cookies);

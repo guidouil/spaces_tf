@@ -23,6 +23,11 @@
 			? snapshot.pendingBingoClaims.some((claim) => claim.playerId === snapshot.currentPlayer?.id)
 			: false
 	);
+	const hasDraftConsensusRound = $derived(
+		snapshot.gameType === 'consensus'
+			? snapshot.rounds.some((round) => round.status === 'draft')
+			: false
+	);
 
 	onMount(() => {
 		playerUrl = `${window.location.origin}${initialJoinUrl}`;
@@ -58,6 +63,21 @@
 		if (status === 'finished') return m.bingo_status_finished();
 		return m.bingo_status_waiting();
 	}
+
+	function gameTypeLabel(gameType: string) {
+		if (gameType === 'bingo') return m.game_type_bingo();
+		if (gameType === 'consensus') return m.game_type_consensus();
+		return m.game_type_quiz();
+	}
+
+	function consensusResultLabel() {
+		if (snapshot.gameType !== 'consensus' || !snapshot.roundResult) {
+			return m.consensus_result_pending();
+		}
+		if (snapshot.roundResult.status === 'tie') return m.consensus_perfect_tie();
+		if (snapshot.roundResult.status === 'none') return m.consensus_no_votes();
+		return m.consensus_majority_spoke();
+	}
 </script>
 
 <svelte:head><title>{m.host_title({ title: snapshot.room.title })}</title></svelte:head>
@@ -75,8 +95,7 @@
 						>
 						<h1 class="mt-4 text-3xl font-black">{snapshot.room.title}</h1>
 						<p class="mt-2 text-sm font-bold text-zinc-600 dark:text-zinc-300">
-							{snapshot.room.gameType === 'bingo' ? m.game_type_bingo() : m.game_type_quiz()} ·
-							{m.host_dashboard()}
+							{gameTypeLabel(snapshot.room.gameType)} · {m.host_dashboard()}
 						</p>
 					</div>
 					<span class:live-dot={connected} class="status-pill">
@@ -273,7 +292,7 @@
 						<button class="big-button" type="submit">{m.add_question()}</button>
 					</form>
 				</section>
-			{:else}
+			{:else if snapshot.gameType === 'bingo'}
 				<section class="panel p-4">
 					<div class="flex items-start justify-between gap-3">
 						<div>
@@ -429,6 +448,126 @@
 						<button class="big-button" type="submit">{m.add_bingo_tile()}</button>
 					</form>
 				</section>
+			{:else if snapshot.gameType === 'consensus'}
+				<section class="panel p-4">
+					<div class="flex items-start justify-between gap-3">
+						<div>
+							<p class="kicker">{m.consensus_tagline()}</p>
+							<h2 class="text-2xl font-black">
+								{snapshot.currentRound ? snapshot.currentRound.text : m.question_incoming()}
+							</h2>
+							<p class="mt-2 text-sm font-black uppercase tracking-[0.14em]">
+								{consensusResultLabel()}
+							</p>
+						</div>
+						<div class="flex flex-wrap justify-end gap-2">
+							<form method="POST" action="?/closeConsensusRound" use:enhance>
+								<button
+									class="small-button"
+									type="submit"
+									disabled={!snapshot.currentRound || snapshot.currentRound.status !== 'active'}
+								>
+									{m.consensus_reveal()}
+								</button>
+							</form>
+							<form method="POST" action="?/launchNextConsensusRound" use:enhance>
+								<button
+									class="small-button"
+									type="submit"
+									disabled={!hasDraftConsensusRound ||
+										(snapshot.currentRound?.status === 'active' && snapshot.room.status === 'live')}
+								>
+									{m.consensus_next_question()}
+								</button>
+							</form>
+							<form method="POST" action="?/finishGame" use:enhance>
+								<button class="small-button danger" type="submit">{m.view_podium()}</button>
+							</form>
+						</div>
+					</div>
+
+					{#if snapshot.currentRound}
+						{#if playerMode}
+							{#if snapshot.currentPlayer}
+								<form
+									method="POST"
+									action="?/voteConsensusAsPlayer"
+									use:enhance
+									class="mt-4 grid gap-3"
+								>
+									{#each snapshot.currentRound.choices as choice, index (`${index}-${choice}`)}
+										<button
+											class="answer-button"
+											class:answered={snapshot.currentPlayerVote?.choiceIndex === index}
+											type="submit"
+											name="choiceIndex"
+											value={index}
+											disabled={Boolean(snapshot.currentPlayerVote) ||
+												snapshot.currentRound.status !== 'active'}
+										>
+											<span>{index === 0 ? 'A' : 'B'}</span>
+											<strong>{choice}</strong>
+										</button>
+									{/each}
+								</form>
+								{#if snapshot.currentPlayerVote}
+									<p class="feedback">{m.consensus_vote_locked()}</p>
+								{:else}
+									<p class="mt-4 text-center text-sm font-black uppercase tracking-[0.16em]">
+										{m.consensus_instruction()}
+									</p>
+								{/if}
+							{:else}
+								<form method="POST" action="?/joinAsPlayer" use:enhance class="mt-4 grid gap-3">
+									<input
+										class="field"
+										name="nickname"
+										placeholder={m.nickname_placeholder()}
+										minlength="2"
+										maxlength="24"
+										autocomplete="nickname"
+										required
+									/>
+									<button class="big-button" type="submit">{m.enter_player_mode()}</button>
+								</form>
+							{/if}
+						{:else}
+							<div class="mt-4 grid gap-2">
+								{#each snapshot.currentRound.choices as choice, index (`${index}-${choice}`)}
+									<div
+										class:correct-choice={snapshot.roundResult?.majorityChoiceIndex === index}
+										class="choice-row"
+									>
+										<span>{index === 0 ? 'A' : 'B'}</span>
+										<strong>{choice}</strong>
+										<small class="font-black">
+											{m.consensus_votes({
+												count: snapshot.roundResult?.voteCounts[index]?.count ?? 0
+											})}
+										</small>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					{:else if playerMode && !snapshot.currentPlayer}
+						<form method="POST" action="?/joinAsPlayer" use:enhance class="mt-4 grid gap-3">
+							<input
+								class="field"
+								name="nickname"
+								placeholder={m.nickname_placeholder()}
+								minlength="2"
+								maxlength="24"
+								autocomplete="nickname"
+								required
+							/>
+							<button class="big-button" type="submit">{m.enter_player_mode()}</button>
+						</form>
+					{:else}
+						<p class="mt-4 rounded-2xl bg-black/5 p-4 font-bold dark:bg-white/10">
+							{m.consensus_waiting_for_host()}
+						</p>
+					{/if}
+				</section>
 			{/if}
 		</div>
 
@@ -478,7 +617,7 @@
 						{/each}
 					</div>
 				</section>
-			{:else}
+			{:else if snapshot.gameType === 'bingo'}
 				<section class="panel p-4">
 					<div class="flex items-start justify-between gap-3">
 						<div>
@@ -532,6 +671,53 @@
 						{:else}
 							<p class="rounded-2xl bg-black/5 p-4 font-bold dark:bg-white/10">
 								{m.bingo_no_claims()}
+							</p>
+						{/each}
+					</div>
+				</section>
+			{:else if snapshot.gameType === 'consensus'}
+				<section class="panel p-4">
+					<div class="flex items-center justify-between gap-3">
+						<div>
+							<p class="kicker">{m.queue()}</p>
+							<h2 class="text-2xl font-black">
+								{m.question_count({ count: snapshot.rounds.length })}
+							</h2>
+						</div>
+						<form method="POST" action="?/finishGame" use:enhance>
+							<button class="small-button danger" type="submit">{m.view_podium()}</button>
+						</form>
+					</div>
+
+					<div class="mt-4 grid gap-3">
+						{#each snapshot.rounds as question (question.id)}
+							<div class="question-card">
+								<div>
+									<p class="font-black">{question.text}</p>
+									<p
+										class="text-xs font-bold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400"
+									>
+										{question.status} · {m.consensus_votes({
+											count: data.questionAnswerCounts[question.id] ?? 0
+										})}
+									</p>
+								</div>
+								<div class="question-actions">
+									<form method="POST" action="?/launchConsensusRound" use:enhance>
+										<input type="hidden" name="questionId" value={question.id} />
+										<button
+											class="small-button"
+											type="submit"
+											disabled={question.status !== 'draft'}
+										>
+											{m.launch()}
+										</button>
+									</form>
+								</div>
+							</div>
+						{:else}
+							<p class="rounded-2xl bg-black/5 p-4 font-bold dark:bg-white/10">
+								{m.no_questions()}
 							</p>
 						{/each}
 					</div>

@@ -50,3 +50,63 @@ test('plays and approves a Bingo claim', async ({ page }) => {
 	await expect(page.locator('.bingo-cell')).toHaveCount(16);
 	await expect(page.getByRole('button', { name: /Bingo/ })).toHaveCount(0);
 });
+
+test('plays a Consensus round and scores the majority', async ({ page }) => {
+	await page.goto('/host/new');
+	await page.getByRole('textbox').fill(`Consensus ${Date.now()}`);
+	await page.getByLabel(/The Consensus|Le Consensus/).check();
+	await page.getByRole('button', { name: /Create room|Créer la room/ }).click();
+	await expect(page).toHaveURL(/\/host\/[a-z0-9]{6}(\?|$)/);
+	await expect(page.getByText(/The Consensus|Le Consensus/)).toBeVisible();
+
+	const origin = new URL(page.url()).origin;
+	const playerHref = await page.locator('a[href^="/r/"]').first().getAttribute('href');
+	const hostUrl = page.url();
+	if (!playerHref) throw new Error('Missing player link');
+	const playerUrl = new URL(playerHref, origin);
+
+	const launchResponse = page.waitForResponse((response) =>
+		response.url().includes('?/launchConsensusRound')
+	);
+	await page
+		.getByRole('button', { name: /Launch|Lancer/ })
+		.first()
+		.click();
+	expect((await launchResponse).ok()).toBe(true);
+	await page.reload();
+	await expect(page.getByRole('button', { name: /Reveal|Révélation/ })).toBeEnabled();
+
+	await page.goto(playerUrl.toString());
+	await page.getByRole('textbox').fill('Consensus Player');
+	await page.getByRole('button', { name: /Enter the room|Entrer dans la room/ }).click();
+	await page.locator('button.answer-button').first().click();
+	await expect(page.getByText(/Vote locked|Vote verrouillé/)).toBeVisible();
+
+	await page.goto(hostUrl);
+	const revealResponse = page.waitForResponse((response) =>
+		response.url().includes('?/closeConsensusRound')
+	);
+	await page.getByRole('button', { name: /Reveal|Révélation/ }).click();
+	expect((await revealResponse).ok()).toBe(true);
+	await page.reload();
+	await expect(page.getByText(/The majority has spoken|La majorité a parlé/)).toBeVisible({
+		timeout: 5000
+	});
+
+	await page.goto(playerUrl.toString());
+	await expect(page.getByText(/You read the room|Tu as senti la salle/)).toBeVisible({
+		timeout: 5000
+	});
+	await expect(page.locator('.score-badge span')).toHaveText('100');
+
+	await page.goto(hostUrl);
+	const nextResponse = page.waitForResponse((response) =>
+		response.url().includes('?/launchNextConsensusRound')
+	);
+	await page.getByRole('button', { name: /Next question|Question suivante/ }).click();
+	expect((await nextResponse).ok()).toBe(true);
+
+	await page.goto(playerUrl.toString());
+	await expect(page.locator('button.answer-button')).toHaveCount(2);
+	await expect(page.locator('button.answer-button').first()).toBeEnabled();
+});
