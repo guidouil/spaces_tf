@@ -18,8 +18,12 @@ import {
 	joinOrCreatePlayer,
 	launchQuestion,
 	playerCookieName,
+	redealBingoCards,
 	requireHost,
 	resolveBingoClaim,
+	startBingoGame,
+	stopBingoGame,
+	updateBingoTile,
 	toggleBingoTile
 } from '$lib/server/game';
 import type { Actions, PageServerLoad } from './$types';
@@ -149,12 +153,31 @@ export const actions: Actions = {
 		const form = await request.formData();
 		return addBingoTile(params.slug, form.get('text'));
 	},
+	updateBingoTile: async ({ params, request, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		const form = await request.formData();
+		const tileId = Number(form.get('tileId'));
+		if (!Number.isInteger(tileId)) return fail(400, { message: m.error_bingo_tile_not_found() });
+		return updateBingoTile(params.slug, tileId, form.get('text'));
+	},
 	deleteBingoTile: async ({ params, request, url, cookies }) => {
 		await authorize(params.slug, url, cookies);
 		const form = await request.formData();
 		const tileId = Number(form.get('tileId'));
 		if (!Number.isInteger(tileId)) return fail(400, { message: m.error_bingo_tile_not_found() });
 		return deleteBingoTile(params.slug, tileId);
+	},
+	startBingo: async ({ params, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		return startBingoGame(params.slug);
+	},
+	stopBingo: async ({ params, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		return stopBingoGame(params.slug);
+	},
+	redealBingoCards: async ({ params, url, cookies }) => {
+		await authorize(params.slug, url, cookies);
+		return redealBingoCards(params.slug);
 	},
 	resolveBingoClaim: async ({ params, request, url, cookies }) => {
 		await authorize(params.slug, url, cookies);

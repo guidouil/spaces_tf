@@ -371,6 +371,8 @@ button:disabled {
 	}
 
 	.bingo-cell {
+		display: grid;
+		place-items: center;
 		aspect-ratio: 1;
 		width: 100%;
 		border: 2px solid currentColor;
@@ -401,6 +403,21 @@ button:disabled {
 		color: #111111;
 	}
 
+	.claim-bingo-grid {
+		gap: 0.4rem;
+	}
+
+	.claim-bingo-grid .bingo-cell {
+		border-radius: 0.65rem;
+		box-shadow: 2px 2px 0 currentColor;
+		font-size: 0.82rem;
+	}
+
+	.claim-bingo-grid .bingo-cell.claimed {
+		outline: 4px solid #ff4f87;
+		outline-offset: -5px;
+	}
+
 	.claim-row {
 		display: grid;
 		gap: 0.75rem;
@@ -408,6 +425,25 @@ button:disabled {
 		border-radius: 0.8rem;
 		background: color-mix(in oklab, Canvas 78%, transparent);
 		padding: 0.8rem;
+	}
+
+	@media (max-width: 640px) {
+		.bingo-grid {
+			align-items: stretch;
+			grid-auto-rows: auto;
+		}
+
+		.bingo-cell {
+			aspect-ratio: auto;
+			min-height: 4.6rem;
+			height: 100%;
+			font-size: 0.82rem;
+		}
+
+		.claim-bingo-grid .bingo-cell {
+			min-height: 3.9rem;
+			font-size: 0.78rem;
+		}
 	}
 
 	.score-badge {

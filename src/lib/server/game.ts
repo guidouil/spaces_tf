@@ -80,6 +80,7 @@ export type PublicBingoClaim = {
 	id: number;
 	playerId: number;
 	nickname: string;
+	card: PublicBingoCard | null;
 	line: number[];
 	status: string;
 	createdAt: string;
@@ -108,6 +109,7 @@ export type BingoGameSnapshot = BaseGameSnapshot & {
 	bingoClaims: PublicBingoClaim[];
 	pendingBingoClaims: PublicBingoClaim[];
 	bingoCompletedLines: number[][];
+	bingoClaimableLines: number[][];
 	bingoCanClaim: boolean;
 };
 
@@ -568,6 +570,90 @@ export async function deleteBingoTile(slug: string, tileId: number) {
 	return { success: true };
 }
 
+export async function updateBingoTile(
+	slug: string,
+	tileId: number,
+	value: FormDataEntryValue | null
+) {
+	const room = await getRoomBySlug(slug);
+	if (!room || normalizeGameType(room.gameType) !== 'bingo') {
+		return fail(404, { message: m.error_room_not_found() });
+	}
+
+	const text = cleanBingoTileText(value);
+	if (text.length < 3) return fail(400, { message: m.error_bingo_tile_short() });
+	if (text.length > 80) return fail(400, { message: m.error_bingo_tile_long() });
+
+	const [updatedTile] = await db
+		.update(bingoTiles)
+		.set({ text })
+		.where(and(eq(bingoTiles.id, tileId), eq(bingoTiles.roomId, room.id)))
+		.returning({ id: bingoTiles.id });
+
+	if (!updatedTile) return fail(404, { message: m.error_bingo_tile_not_found() });
+
+	await db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, room.id));
+
+	return { success: true };
+}
+
+export async function startBingoGame(slug: string) {
+	const room = await getRoomBySlug(slug);
+	if (!room || normalizeGameType(room.gameType) !== 'bingo') {
+		return fail(404, { message: m.error_room_not_found() });
+	}
+
+	const roomTiles = await db.select().from(bingoTiles).where(eq(bingoTiles.roomId, room.id));
+	if (roomTiles.length < BINGO_CARD_CELL_COUNT) {
+		return fail(400, { message: m.error_bingo_min_tiles() });
+	}
+
+	await db
+		.update(rooms)
+		.set({ status: 'live', activeQuestionId: null, updatedAt: new Date() })
+		.where(eq(rooms.id, room.id));
+
+	return { success: true };
+}
+
+export async function stopBingoGame(slug: string) {
+	const room = await getRoomBySlug(slug);
+	if (!room || normalizeGameType(room.gameType) !== 'bingo') {
+		return fail(404, { message: m.error_room_not_found() });
+	}
+
+	await db
+		.update(rooms)
+		.set({ status: 'waiting', activeQuestionId: null, updatedAt: new Date() })
+		.where(eq(rooms.id, room.id));
+
+	return { success: true };
+}
+
+export async function redealBingoCards(slug: string) {
+	const room = await getRoomBySlug(slug);
+	if (!room || normalizeGameType(room.gameType) !== 'bingo') {
+		return fail(404, { message: m.error_room_not_found() });
+	}
+
+	const roomTiles = await db.select().from(bingoTiles).where(eq(bingoTiles.roomId, room.id));
+	if (roomTiles.length < BINGO_CARD_CELL_COUNT) {
+		return fail(400, { message: m.error_bingo_min_tiles() });
+	}
+
+	await db.transaction(async (tx) => {
+		await tx.delete(bingoClaims).where(eq(bingoClaims.roomId, room.id));
+		await tx.delete(bingoCards).where(eq(bingoCards.roomId, room.id));
+		await tx.update(players).set({ score: 0 }).where(eq(players.roomId, room.id));
+		await tx
+			.update(rooms)
+			.set({ status: 'waiting', activeQuestionId: null, updatedAt: new Date() })
+			.where(eq(rooms.id, room.id));
+	});
+
+	return { success: true };
+}
+
 export async function toggleBingoTile(slug: string, playerId: number | null, tileId: number) {
 	const room = await getRoomBySlug(slug);
 	if (!room) return fail(404, { message: m.error_room_not_found() });
@@ -575,6 +661,7 @@ export async function toggleBingoTile(slug: string, playerId: number | null, til
 		return fail(400, { message: m.error_bingo_action_invalid() });
 	}
 	if (room.status === 'finished') return fail(409, { message: m.error_game_finished() });
+	if (room.status !== 'live') return fail(409, { message: m.error_bingo_not_live() });
 	if (!playerId) return fail(401, { message: m.error_join_before_playing() });
 
 	const player = await getPlayerForRoom(slug, playerId);
@@ -603,6 +690,7 @@ export async function claimBingo(slug: string, playerId: number | null, line: nu
 		return fail(400, { message: m.error_bingo_action_invalid() });
 	}
 	if (room.status === 'finished') return fail(409, { message: m.error_game_finished() });
+	if (room.status !== 'live') return fail(409, { message: m.error_bingo_not_live() });
 	if (!playerId) return fail(401, { message: m.error_join_before_playing() });
 
 	const player = await getPlayerForRoom(slug, playerId);
@@ -669,10 +757,7 @@ export async function resolveBingoClaim(
 		if (decision === 'approved') {
 			await tx.update(players).set({ score: 0 }).where(eq(players.roomId, room.id));
 			await tx.update(players).set({ score: 1 }).where(eq(players.id, claim.playerId));
-			await tx
-				.update(rooms)
-				.set({ status: 'finished', updatedAt: new Date() })
-				.where(eq(rooms.id, room.id));
+			await tx.update(rooms).set({ status: 'live', updatedAt: new Date() }).where(eq(rooms.id, room.id));
 		} else {
 			await tx.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, room.id));
 		}
@@ -776,12 +861,32 @@ async function getBingoSnapshot(
 			.orderBy(desc(bingoClaims.createdAt))
 	]);
 
-	const card = currentPlayer ? await getOrCreateBingoCard(room.id, currentPlayer.id) : null;
+	const card = currentPlayer ? await getOrCreateBingoCard(room.id, currentPlayer.id, tiles) : null;
 	const completedLines = card ? getCompletedBingoLines(card.cells) : [];
+	const claimCards = await getBingoClaimCards(
+		room.id,
+		claims.map((claim) => claim.playerId),
+		tiles
+	);
 	const publicClaims = claims.map((claim) => {
 		const player = roomPlayers.find((roomPlayer) => roomPlayer.id === claim.playerId);
-		return toPublicBingoClaim(claim, player?.nickname ?? m.unknown_player());
+		return toPublicBingoClaim(
+			claim,
+			player?.nickname ?? m.unknown_player(),
+			claimCards.get(claim.playerId) ?? null
+		);
 	});
+	const claimableLines = currentPlayer
+		? completedLines.filter(
+				(line) =>
+					!publicClaims.some(
+						(claim) =>
+							claim.playerId === currentPlayer.id &&
+							claim.status !== 'rejected' &&
+							isSameBingoLine(claim.line, line)
+					)
+			)
+		: [];
 
 	return {
 		gameType: 'bingo',
@@ -795,7 +900,8 @@ async function getBingoSnapshot(
 		bingoClaims: publicClaims,
 		pendingBingoClaims: publicClaims.filter((claim) => claim.status === 'pending'),
 		bingoCompletedLines: completedLines,
-		bingoCanClaim: room.status !== 'finished' && completedLines.length > 0
+		bingoClaimableLines: claimableLines,
+		bingoCanClaim: room.status === 'live' && claimableLines.length > 0
 	};
 }
 
@@ -1088,12 +1194,14 @@ function toPublicBingoTile(tile: typeof bingoTiles.$inferSelect): PublicBingoTil
 
 function toPublicBingoClaim(
 	claim: typeof bingoClaims.$inferSelect,
-	nickname: string
+	nickname: string,
+	card: PublicBingoCard | null = null
 ): PublicBingoClaim {
 	return {
 		id: claim.id,
 		playerId: claim.playerId,
 		nickname,
+		card,
 		line: claim.line,
 		status: claim.status,
 		createdAt: claim.createdAt.toISOString(),
@@ -1101,14 +1209,38 @@ function toPublicBingoClaim(
 	};
 }
 
-async function getOrCreateBingoCard(roomId: number, playerId: number): Promise<PublicBingoCard> {
-	const existingCard = await getBingoCard(roomId, playerId);
-	if (existingCard) return existingCard;
+async function getBingoClaimCards(
+	roomId: number,
+	playerIds: number[],
+	tiles: Array<typeof bingoTiles.$inferSelect>
+) {
+	const uniquePlayerIds = [...new Set(playerIds)];
+	const cards = new Map<number, PublicBingoCard>();
+	if (uniquePlayerIds.length === 0) return cards;
 
-	const tiles = await db.select().from(bingoTiles).where(eq(bingoTiles.roomId, roomId));
+	const roomCards = await db
+		.select()
+		.from(bingoCards)
+		.where(and(eq(bingoCards.roomId, roomId), inArray(bingoCards.playerId, uniquePlayerIds)));
+
+	for (const card of roomCards) {
+		cards.set(card.playerId, await reconcileBingoCard(toPublicBingoCard(card), tiles));
+	}
+
+	return cards;
+}
+
+async function getOrCreateBingoCard(
+	roomId: number,
+	playerId: number,
+	roomTiles?: Array<typeof bingoTiles.$inferSelect>
+): Promise<PublicBingoCard> {
+	const tiles = roomTiles ?? (await db.select().from(bingoTiles).where(eq(bingoTiles.roomId, roomId)));
+	const existingCard = await getBingoCard(roomId, playerId);
 	if (tiles.length < BINGO_CARD_CELL_COUNT) {
 		throw new Error('Bingo room does not have enough tiles.');
 	}
+	if (existingCard) return reconcileBingoCard(existingCard, tiles);
 
 	try {
 		const [card] = await db
@@ -1120,10 +1252,10 @@ async function getOrCreateBingoCard(roomId: number, playerId: number): Promise<P
 			})
 			.returning();
 
-		return toPublicBingoCard(card);
+		return toPublicBingoCard(card, tiles);
 	} catch {
 		const card = await getBingoCard(roomId, playerId);
-		if (card) return card;
+		if (card) return reconcileBingoCard(card, tiles);
 		throw new Error('Could not create bingo card.');
 	}
 }
@@ -1138,12 +1270,75 @@ async function getBingoCard(roomId: number, playerId: number) {
 	return card ? toPublicBingoCard(card) : null;
 }
 
-function toPublicBingoCard(card: typeof bingoCards.$inferSelect): PublicBingoCard {
+async function reconcileBingoCard(
+	card: PublicBingoCard,
+	tiles: Array<typeof bingoTiles.$inferSelect>
+): Promise<PublicBingoCard> {
+	const tileById = new Map(tiles.map((tile) => [tile.id, toPublicBingoTile(tile)]));
+	const seenTileIds = new Set<number>();
+	const keptCells = card.cells.filter((cell) => {
+		if (!tileById.has(cell.tileId) || seenTileIds.has(cell.tileId)) return false;
+		seenTileIds.add(cell.tileId);
+		return true;
+	});
+
+	if (keptCells.length === BINGO_CARD_CELL_COUNT) {
+		return {
+			...card,
+			cells: keptCells.map((cell) => ({ ...cell, text: tileById.get(cell.tileId)?.text ?? cell.text }))
+		};
+	}
+
+	const replacements = makeBingoReplacementCells(
+		tiles.filter((tile) => !seenTileIds.has(tile.id)).map(toPublicBingoTile),
+		BINGO_CARD_CELL_COUNT - keptCells.length
+	);
+	const cells = [...keptCells, ...replacements].map((cell) => ({
+		...cell,
+		text: tileById.get(cell.tileId)?.text ?? cell.text
+	}));
+
+	await db
+		.update(bingoCards)
+		.set({ cells, updatedAt: new Date() })
+		.where(eq(bingoCards.id, card.id));
+
+	return { ...card, cells };
+}
+
+function toPublicBingoCard(
+	card: typeof bingoCards.$inferSelect,
+	tiles?: Array<typeof bingoTiles.$inferSelect>
+): PublicBingoCard {
+	const tileById = tiles ? new Map(tiles.map((tile) => [tile.id, tile.text])) : null;
+
 	return {
 		id: card.id,
 		size: BINGO_SIZE,
-		cells: card.cells
+		cells: card.cells.map((cell) => ({
+			...cell,
+			text: tileById?.get(cell.tileId) ?? cell.text
+		}))
 	};
+}
+
+function makeBingoReplacementCells(tiles: PublicBingoTile[], count: number): BingoCardCell[] {
+	const shuffled = [...tiles];
+
+	for (let index = shuffled.length - 1; index > 0; index -= 1) {
+		const target = Math.floor(Math.random() * (index + 1));
+		[shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+	}
+
+	return shuffled.slice(0, count).map((tile) => ({
+		tileId: tile.id,
+		text: tile.text,
+		checked: false
+	}));
+}
+
+function isSameBingoLine(left: number[], right: number[]) {
+	return [...left].sort((a, b) => a - b).join(',') === [...right].sort((a, b) => a - b).join(',');
 }
 
 function getDefaultBingoTileTexts() {

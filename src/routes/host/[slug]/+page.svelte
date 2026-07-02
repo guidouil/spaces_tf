@@ -16,7 +16,7 @@
 	let playerMode = $state(false);
 	const selectedCategories = $derived(data.quizCategories[quizSource] ?? []);
 	const firstBingoLine = $derived(
-		snapshot.gameType === 'bingo' ? (snapshot.bingoCompletedLines[0] ?? null) : null
+		snapshot.gameType === 'bingo' ? (snapshot.bingoClaimableLines[0] ?? null) : null
 	);
 	const currentPlayerHasPendingBingo = $derived(
 		snapshot.gameType === 'bingo' && snapshot.currentPlayer
@@ -51,6 +51,12 @@
 		if (status === 'approved') return m.bingo_claim_approved();
 		if (status === 'rejected') return m.bingo_claim_rejected();
 		return m.bingo_claim_pending();
+	}
+
+	function bingoStatusLabel(status: string) {
+		if (status === 'live') return m.bingo_status_live();
+		if (status === 'finished') return m.bingo_status_finished();
+		return m.bingo_status_waiting();
 	}
 </script>
 
@@ -277,10 +283,36 @@
 									? m.bingo_claims_waiting({ count: snapshot.pendingBingoClaims.length })
 									: m.bingo_waiting_for_claims()}
 							</h2>
+							<p class="mt-2 text-sm font-black uppercase tracking-[0.14em]">
+								{bingoStatusLabel(snapshot.room.status)}
+							</p>
 						</div>
-						<form method="POST" action="?/finishGame" use:enhance>
-							<button class="small-button danger" type="submit">{m.view_podium()}</button>
-						</form>
+						<div class="flex flex-wrap justify-end gap-2">
+							<form method="POST" action="?/startBingo" use:enhance>
+								<button
+									class="small-button"
+									type="submit"
+									disabled={snapshot.room.status === 'live'}
+								>
+									{m.start_bingo()}
+								</button>
+							</form>
+							<form method="POST" action="?/stopBingo" use:enhance>
+								<button
+									class="small-button"
+									type="submit"
+									disabled={snapshot.room.status !== 'live'}
+								>
+									{m.stop_bingo()}
+								</button>
+							</form>
+							<form method="POST" action="?/redealBingoCards" use:enhance>
+								<button class="small-button danger" type="submit">{m.redeal_bingo_cards()}</button>
+							</form>
+							<form method="POST" action="?/finishGame" use:enhance>
+								<button class="small-button danger" type="submit">{m.view_podium()}</button>
+							</form>
+						</div>
 					</div>
 
 					{#if playerMode}
@@ -298,7 +330,7 @@
 										type="submit"
 										name="tileId"
 										value={cell.tileId}
-										disabled={snapshot.room.status === 'finished'}
+										disabled={snapshot.room.status !== 'live'}
 									>
 										{cell.text}
 									</button>
@@ -310,11 +342,15 @@
 									<button
 										class="big-button w-full"
 										type="submit"
-										disabled={currentPlayerHasPendingBingo || snapshot.room.status === 'finished'}
+										disabled={currentPlayerHasPendingBingo || snapshot.room.status !== 'live'}
 									>
 										{currentPlayerHasPendingBingo ? m.bingo_claim_pending() : m.call_bingo()}
 									</button>
 								</form>
+							{:else if currentPlayerHasPendingBingo}
+								<p class="feedback">{m.bingo_claim_pending()}</p>
+							{:else if snapshot.room.status === 'waiting'}
+								<p class="feedback">{m.bingo_waiting_for_host()}</p>
 							{:else}
 								<p class="feedback">{m.bingo_keep_listening()}</p>
 							{/if}
@@ -342,6 +378,19 @@
 										</p>
 										<p class="text-2xl font-black">{claim.nickname}</p>
 									</div>
+									{#if claim.card}
+										<div class="bingo-grid claim-bingo-grid">
+											{#each claim.card.cells as cell, index (cell.tileId)}
+												<div
+													class="bingo-cell"
+													class:checked={cell.checked}
+													class:claimed={claim.line.includes(index)}
+												>
+													{cell.text}
+												</div>
+											{/each}
+										</div>
+									{/if}
 									<div class="grid gap-2 sm:grid-cols-2">
 										<form method="POST" action="?/resolveBingoClaim">
 											<input type="hidden" name="claimId" value={claim.id} />
@@ -438,7 +487,11 @@
 					<div class="mt-4 grid gap-2">
 						{#each snapshot.bingoTiles as tile (tile.id)}
 							<div class="question-card">
-								<p class="font-black">{tile.text}</p>
+								<form method="POST" action="?/updateBingoTile" use:enhance class="grid gap-2">
+									<input type="hidden" name="tileId" value={tile.id} />
+									<input class="field" name="text" value={tile.text} maxlength="80" required />
+									<button class="small-button" type="submit">{m.update_bingo_tile()}</button>
+								</form>
 								<form method="POST" action="?/deleteBingoTile" use:enhance>
 									<input type="hidden" name="tileId" value={tile.id} />
 									<button

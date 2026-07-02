@@ -11,7 +11,7 @@
 	let connected = $state(false);
 	let source: EventSource | null = null;
 	const firstBingoLine = $derived(
-		snapshot?.gameType === 'bingo' ? (snapshot.bingoCompletedLines[0] ?? null) : null
+		snapshot?.gameType === 'bingo' ? (snapshot.bingoClaimableLines[0] ?? null) : null
 	);
 	const currentPlayerHasPendingBingo = $derived(
 		snapshot?.gameType === 'bingo' && snapshot.currentPlayer
@@ -190,9 +190,7 @@
 					<div class="flex items-start justify-between gap-3">
 						<div>
 							<p class="kicker">{snapshot.room.title}</p>
-							<h1 class="mt-2 text-3xl font-black">
-								{snapshot.room.status === 'finished' ? m.survivor_podium() : m.bingo_player_board()}
-							</h1>
+							<h1 class="mt-2 text-3xl font-black">{m.bingo_player_board()}</h1>
 						</div>
 						<div class="score-badge">
 							<span>{snapshot.currentPlayer?.score ?? 0}</span>
@@ -200,14 +198,7 @@
 						</div>
 					</div>
 
-					{#if snapshot.room.status === 'finished'}
-						<a
-							class="big-button mt-6 block text-center"
-							href={resolve('/r/[slug]/podium', { slug: snapshot.room.slug })}
-						>
-							{m.view_podium()}
-						</a>
-					{:else if snapshot.bingoCard}
+					{#if snapshot.bingoCard}
 						<form method="POST" action="?/toggleBingoTile" use:enhance class="bingo-grid mt-6">
 							{#each snapshot.bingoCard.cells as cell (cell.tileId)}
 								<button
@@ -216,6 +207,7 @@
 									type="submit"
 									name="tileId"
 									value={cell.tileId}
+									disabled={snapshot.room.status !== 'live'}
 								>
 									{cell.text}
 								</button>
@@ -228,11 +220,22 @@
 								<button
 									class="big-button w-full"
 									type="submit"
-									disabled={currentPlayerHasPendingBingo}
+									disabled={currentPlayerHasPendingBingo || snapshot.room.status !== 'live'}
 								>
 									{currentPlayerHasPendingBingo ? m.bingo_claim_pending() : m.call_bingo()}
 								</button>
 							</form>
+						{:else if currentPlayerHasPendingBingo}
+							<p class="feedback">{m.bingo_claim_pending()}</p>
+						{:else if snapshot.room.status === 'waiting'}
+							<p class="feedback">{m.bingo_waiting_for_host()}</p>
+						{:else if snapshot.room.status === 'finished'}
+							<a
+								class="big-button mt-4 block text-center"
+								href={resolve('/r/[slug]/podium', { slug: snapshot.room.slug })}
+							>
+								{m.view_podium()}
+							</a>
 						{:else if form?.message}
 							<p class="feedback">{form.message}</p>
 						{:else}

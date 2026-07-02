@@ -18,6 +18,7 @@ test('plays and approves a Bingo claim', async ({ page }) => {
 	await page.getByLabel(/Spaces Bingo|Bingo des Spaces/).check();
 	await page.getByRole('button', { name: /Create room|Créer la room/ }).click();
 	await expect(page).toHaveURL(/\/host\/[a-z0-9]{6}(\?|$)/);
+	await page.getByRole('button', { name: /Start Bingo|Démarrer le Bingo/ }).click();
 
 	const origin = new URL(page.url()).origin;
 	const playerHref = await page.locator('a[href^="/r/"]').first().getAttribute('href');
@@ -38,6 +39,7 @@ test('plays and approves a Bingo claim', async ({ page }) => {
 	}
 
 	await page.getByRole('button', { name: /Bingo/ }).click();
+	await expect(page.getByText(/Pending|En attente/)).toBeVisible();
 	await page.goto(hostUrl);
 	await expect(page.getByText(/Bingo claims to check|Bingo à vérifier/)).toBeVisible({
 		timeout: 5000
@@ -45,7 +47,6 @@ test('plays and approves a Bingo claim', async ({ page }) => {
 	await page.getByRole('button', { name: /Approve|Valider/ }).click();
 	await expect(page.getByText(/Approved|Validé/)).toBeVisible({ timeout: 5000 });
 	await page.goto(`${origin}/r/${slug}`);
-	await expect(page.getByRole('link', { name: /View podium|Voir le podium/ })).toBeVisible({
-		timeout: 5000
-	});
+	await expect(page.locator('.bingo-cell')).toHaveCount(16);
+	await expect(page.getByRole('button', { name: /Bingo/ })).toHaveCount(0);
 });
