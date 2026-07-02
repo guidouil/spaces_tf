@@ -13,16 +13,27 @@ import {
 } from '$lib/server/game';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ params, cookies }) => {
+export const load: PageServerLoad = async ({ params, cookies, url }) => {
 	const room = await getRoomBySlug(params.slug);
 	const playerId = Number(cookies.get(playerCookieName(params.slug)));
 	const player = Number.isInteger(playerId) ? await getPlayerForRoom(params.slug, playerId) : null;
 	const snapshot = await getSnapshot(params.slug, { playerId: player?.id ?? null });
+	const pageUrl = `${url.origin}/r/${params.slug}`;
 
 	return {
 		roomExists: Boolean(room),
 		player,
-		snapshot
+		snapshot,
+		social: {
+			title: room ? `${room.title} - Spaces.tf` : 'Room not found - Spaces.tf',
+			description: room
+				? room.gameType === 'bingo'
+					? `Join "${room.title}" on Spaces.tf: a live Spaces Bingo room for this Space.`
+					: `Join "${room.title}" on Spaces.tf: a live quiz room for this Space.`
+				: 'This Spaces.tf room could not be found.',
+			url: pageUrl,
+			image: `${pageUrl}/og.png`
+		}
 	};
 };
 

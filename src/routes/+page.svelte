@@ -3,13 +3,31 @@
 	import { resolve } from '$app/paths';
 	import BuyMeACoffeeLink from '$lib/BuyMeACoffeeLink.svelte';
 	import * as m from '$lib/paraglide/messages';
+	import type { PageData } from './$types';
 
-	let { form }: { form: { message?: string } | null } = $props();
+	let { data, form }: { data: PageData; form: { message?: string } | null } = $props();
+
+	const ogTitle = 'Spaces.tf - Live Space Games';
+	const ogDescription =
+		'Host a live quiz or Spaces Bingo for your Twitter/X Space. Share one link and play in real time.';
 </script>
 
 <svelte:head>
 	<title>{m.site_title()}</title>
 	<meta name="description" content={m.site_description()} />
+	<meta property="og:type" content="website" />
+	<meta property="og:site_name" content="Spaces.tf" />
+	<meta property="og:title" content={ogTitle} />
+	<meta property="og:description" content={ogDescription} />
+	<meta property="og:url" content={data.social.url} />
+	<meta property="og:image" content={data.social.image} />
+	<meta property="og:image:width" content="1200" />
+	<meta property="og:image:height" content="630" />
+	<meta property="og:image:alt" content="Spaces.tf live mini-games preview" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:title" content={ogTitle} />
+	<meta name="twitter:description" content={ogDescription} />
+	<meta name="twitter:image" content={data.social.image} />
 </svelte:head>
 
 <main class="screen-shell">
