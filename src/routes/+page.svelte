@@ -38,14 +38,12 @@
 				<span>Spaces.tf</span>
 			</a>
 			<div class="flex items-center gap-3">
-				<a class="text-xs font-black uppercase tracking-[0.18em] underline" href={resolve('/host')}>
+				<a
+					class="rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.18em] underline"
+					href={resolve('/host')}
+				>
 					{m.my_games()}
 				</a>
-				<span
-					class="rounded-full border border-current/20 px-3 py-1 text-xs font-black uppercase tracking-[0.2em]"
-				>
-					{m.live_quiz()}
-				</span>
 			</div>
 		</header>
 

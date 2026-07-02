@@ -132,6 +132,13 @@
 							<h2 class="text-2xl font-black">
 								{snapshot.activeQuestion ? snapshot.activeQuestion.text : m.question_incoming()}
 							</h2>
+							{#if snapshot.activeQuestion}
+								<p
+									class="mt-2 text-xs font-bold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400"
+								>
+									{m.answer_count({ count: snapshot.activeQuestionAnswerCount })}
+								</p>
+							{/if}
 						</div>
 						<form method="POST" action="?/closeQuestion" use:enhance>
 							<button class="small-button" type="submit" disabled={!snapshot.activeQuestion}

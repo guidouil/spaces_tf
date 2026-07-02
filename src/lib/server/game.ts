@@ -117,6 +117,7 @@ type BaseGameSnapshot = {
 export type QuizGameSnapshot = BaseGameSnapshot & {
 	gameType: 'quiz';
 	activeQuestion: PublicQuestion | null;
+	activeQuestionAnswerCount: number;
 	currentPlayerAnswer: PublicAnswer | null;
 	questions: PublicQuestion[];
 };
@@ -1059,6 +1060,7 @@ async function getQuizSnapshot(
 		: null;
 
 	let currentPlayerAnswer: PublicAnswer | null = null;
+	let activeQuestionAnswerCount = 0;
 	if (currentPlayer && activeQuestion) {
 		const [answer] = await db
 			.select()
@@ -1075,6 +1077,13 @@ async function getQuizSnapshot(
 				}
 			: null;
 	}
+	if (activeQuestion) {
+		const [answerCount] = await db
+			.select({ count: sql<number>`count(*)`.mapWith(Number) })
+			.from(answers)
+			.where(eq(answers.questionId, activeQuestion.id));
+		activeQuestionAnswerCount = answerCount?.count ?? 0;
+	}
 
 	return {
 		gameType: 'quiz' as const,
@@ -1087,6 +1096,7 @@ async function getQuizSnapshot(
 					options.includeAnswers || activeQuestion.status !== 'active'
 				)
 			: null,
+		activeQuestionAnswerCount,
 		currentPlayer: currentPlayer ? toPublicPlayer(currentPlayer) : null,
 		currentPlayerAnswer,
 		podium: roomPlayers.slice(0, 3).map(toPublicPlayer),
